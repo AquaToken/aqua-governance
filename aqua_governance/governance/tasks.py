@@ -4,7 +4,7 @@ from typing import Optional
 
 from django.conf import settings
 
-from stellar_sdk import Server, Asset
+from stellar_sdk import Asset, Server
 
 from aqua_governance.governance.exceptions import ClaimableBalanceParsingError
 from aqua_governance.governance.models import LogVote, Proposal
@@ -12,6 +12,7 @@ from aqua_governance.governance.parser import parse_balance_info
 from aqua_governance.taskapp import app as celery_app
 from aqua_governance.utils.requests import load_all_records
 from aqua_governance.utils.signals import DisableSignals
+
 
 logger = logging.getLogger()
 
@@ -53,13 +54,13 @@ def task_update_proposal_result(proposal_id):
     request_builders = (
         (
             horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
-                Asset(AQUA_ASSET_CODE, AQUA_ASSET_ISSUER)
+                Asset(AQUA_ASSET_CODE, AQUA_ASSET_ISSUER),
             ).order(desc=False),
             LogVote.VOTE_FOR,
         ),
         (
             horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
-                Asset(AQUA_ASSET_CODE, AQUA_ASSET_ISSUER)
+                Asset(AQUA_ASSET_CODE, AQUA_ASSET_ISSUER),
             ).order(desc=False),
             LogVote.VOTE_AGAINST,
         ),
