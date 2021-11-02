@@ -23,7 +23,8 @@ from django.urls import include, path
 
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path('api/', include('aqua_governance.governance.urls')),
+    path('open/cms/', admin.site.urls),
 ]
 
 

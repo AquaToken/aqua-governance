@@ -28,7 +28,7 @@ django-debug-toolbar = "*"
 
 [packages]
 django-environ = "*"
-psycopg2 = "*"
+psycopg2-binary = "*"
 celery = "*"
 ipython = "*"
 sentry-sdk = "*"
@@ -37,6 +37,7 @@ gunicorn = "*"
 django-storages = "*"
 boto3 = "*"
 Django = ">=3.2,<4.0"
+stellar-sdk = "==5.0.0"
 
 [requires]
 python_version = "3.9"

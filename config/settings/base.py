@@ -38,6 +38,7 @@ THIRD_PARTY_APPS = [
 
 LOCAL_APPS = [
     'aqua_governance.taskapp',
+    'aqua_governance.governance',
 ]
 
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -152,6 +153,7 @@ MEDIA_ROOT = root('media')
 # --------------------------------------------------------------------------
 
 CELERY_ENABLED = env.bool('CELERY_ENABLED', default=True)
+
 if CELERY_ENABLED:
 
     CELERY_ACCEPT_CONTENT = ['json']
@@ -164,4 +166,9 @@ if CELERY_ENABLED:
 # --------------------------------------------------------------------------
 
 REST_FRAMEWORK = {
+    'PAGE_SIZE': 30,
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'DEFAULT_RENDERER_CLASSES': [
+        'rest_framework.renderers.JSONRenderer',
+    ],
 }

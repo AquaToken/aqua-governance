@@ -98,3 +98,10 @@ if SENTRY_ENABLED:
         traces_sample_rate=0.2,
         integrations=[DjangoIntegration(), CeleryIntegration()],
     )
+
+
+# Horizon configuration
+# --------------------------------------------------------------------------
+
+STELLAR_PASSPHRASE = 'Public Global Stellar Network ; September 2015'
+HORIZON_URL = 'https://horizon.stellar.org'
