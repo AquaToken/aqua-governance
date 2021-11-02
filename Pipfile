@@ -34,8 +34,6 @@ ipython = "*"
 sentry-sdk = "*"
 djangorestframework = ">=3.10"
 gunicorn = "*"
-django-storages = "*"
-boto3 = "*"
 Django = ">=3.2,<4.0"
 stellar-sdk = "==5.0.0"
 
