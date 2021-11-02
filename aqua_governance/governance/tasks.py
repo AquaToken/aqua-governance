@@ -1,5 +1,6 @@
 import logging
 import sys
+from datetime import datetime
 from typing import Optional
 
 from django.conf import settings
@@ -74,3 +75,12 @@ def task_update_proposal_result(proposal_id):
 
     LogVote.objects.bulk_create(new_log_vote_list)
     _update_proposal_final_results(proposal_id)
+
+
+@celery_app.task(ignore_result=True)
+def task_update_active_proposals():
+    now = datetime.now()
+    active_proposals = Proposal.objects.filter(start_at__lte=now, end_at__gte=now)
+
+    for proposal in active_proposals:
+        task_update_proposal_result.delay(proposal.id)

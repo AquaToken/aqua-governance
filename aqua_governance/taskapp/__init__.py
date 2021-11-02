@@ -1,9 +1,9 @@
 import os
-from datetime import timedelta
 
 from django.conf import settings
 
 from celery import Celery
+from celery.schedules import crontab
 
 
 if not settings.configured:
@@ -14,3 +14,14 @@ app = Celery('aqua_governance')
 app.config_from_object('django.conf:settings', namespace='CELERY')
 app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
 app.conf.timezone = 'UTC'
+
+
+@app.on_after_finalize.connect
+def setup_periodic_tasks(sender, **kwargs):
+    app.conf.beat_schedule.update({
+        'aqua_governance.governance.tasks.task_update_active_proposals': {
+            'task': 'aqua_governance.governance.tasks.task_update_active_proposals',
+            'schedule': crontab(minute='*/5'),
+            'args': (),
+        },
+    })
