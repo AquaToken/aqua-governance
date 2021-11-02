@@ -21,7 +21,7 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
         HideFilterBackend,
         OrderingFilter,
     )
-    ordering = ['created_at', 'id']
+    ordering = ['created_at']
 
     def get_serializer_class(self):
         if self.action == 'retrieve':
@@ -37,6 +37,7 @@ class LogVoteView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
         OrderingFilter,
     )
     ordering = ['-created_at']
+    ordering_fields = ['created_at', 'amount', 'vote_choice', 'account_issuer']
 
     def get_queryset(self):
         proposal_id = self.request.query_params.get('proposal_id', None)
