@@ -28,7 +28,7 @@ django-debug-toolbar = "*"
 
 [packages]
 django-environ = "*"
-psycopg2-binary = "*"
+psycopg2 = "*"
 celery = "*"
 ipython = "*"
 sentry-sdk = "*"

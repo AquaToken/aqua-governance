@@ -20,7 +20,7 @@ MANAGERS = ADMINS
 # --------------------------------------------------------------------------
 
 DATABASES = {
-    'default': env.db(default='postgres://levik_aqua:12345@localhost/aqua_governance'),
+    'default': env.db(default='postgres://localhost/aqua_governance'),
 }
 
 
@@ -52,7 +52,7 @@ INTERNAL_IPS = ('127.0.0.1',)
 if CELERY_ENABLED:
     CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='amqp://guest@localhost//')
 
-    # CELERY_TASK_ALWAYS_EAGER = True
+    CELERY_TASK_ALWAYS_EAGER = True
 
 
 # Sentry config
