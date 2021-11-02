@@ -1,4 +1,5 @@
 from django.db.models import Prefetch
+from django.http import Http404
 from rest_framework.filters import OrderingFilter
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
 from rest_framework.permissions import AllowAny
@@ -6,7 +7,7 @@ from rest_framework.viewsets import GenericViewSet
 
 from aqua_governance.governance.filters import HideFilterBackend
 from aqua_governance.governance.models import Proposal, LogVote
-from aqua_governance.governance.serializers import ProposalDetailSerializer, ProposalListSerializer
+from aqua_governance.governance.serializers import ProposalDetailSerializer, ProposalListSerializer, LogVoteSerializer
 
 
 class ProposalsView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
@@ -25,3 +26,21 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
         if self.action == 'retrieve':
             return ProposalDetailSerializer
         return super().get_serializer_class()
+
+
+class LogVoteView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
+    queryset = LogVote.objects.all()
+    permission_classes = (AllowAny, )
+    serializer_class = LogVoteSerializer
+    filter_backends = (
+        OrderingFilter,
+    )
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        proposal_id = self.request.query_params.get('proposal_id', None)
+        if not proposal_id:
+            raise Http404
+        queryset = super(LogVoteView, self).get_queryset()
+
+        return queryset.filter(proposal=proposal_id)

@@ -50,30 +50,21 @@ def task_update_proposal_result(proposal_id):
     proposal = Proposal.objects.get(id=proposal_id)
     new_log_vote_list = []
 
-    # request_builders = (
-    #     (
-    #         horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
-    #             Asset(AQUA_ASSET_CODE, AQUA_ASSET_ISSUER)
-    #         ).order(desc=False),
-    #         LogVote.VOTE_FOR,
-    #     ),
-    #     (
-    #         horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
-    #             Asset(AQUA_ASSET_CODE, AQUA_ASSET_ISSUER)
-    #         ).order(desc=False),
-    #         LogVote.VOTE_AGAINST,
-    #     ),
-    # )
     request_builders = (
         (
-            horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
+            horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
+                Asset(AQUA_ASSET_CODE, AQUA_ASSET_ISSUER)
+            ).order(desc=False),
             LogVote.VOTE_FOR,
         ),
         (
-            horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
+            horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
+                Asset(AQUA_ASSET_CODE, AQUA_ASSET_ISSUER)
+            ).order(desc=False),
             LogVote.VOTE_AGAINST,
         ),
     )
+
     for request_builder in request_builders:
         for balance in load_all_records(request_builder[0]):
             claimable_balance = _parse_claimable_balance(balance, proposal, request_builder[1])
