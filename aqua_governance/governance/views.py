@@ -30,16 +30,21 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
             return ProposalDetailSerializer
         return super().get_serializer_class()
 
+    # TODO refactor
     def list(self, request, *args, **kwargs):
         response = super(ProposalsView, self).list(request, *args, **kwargs)
-        response.headers = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET,OPTIONS",
-        }
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET,OPTIONS'
+        return response
+
+    def retrieve(self, request, *args, **kwargs):
+        response = super(ProposalsView, self).retrieve(request, *args, **kwargs)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET,OPTIONS'
         return response
 
 
-class LogVoteView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
+class LogVoteView(ListModelMixin, GenericViewSet):
     queryset = LogVote.objects.all()
     permission_classes = (AllowAny, )
     serializer_class = LogVoteSerializer
@@ -57,3 +62,9 @@ class LogVoteView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
         queryset = super(LogVoteView, self).get_queryset()
 
         return queryset.filter(proposal=proposal_id)
+
+    def list(self, request, *args, **kwargs):
+        response = super(LogVoteView, self).list(request, *args, **kwargs)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET,OPTIONS'
+        return response
