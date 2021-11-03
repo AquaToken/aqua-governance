@@ -21,11 +21,10 @@ class ProposalListSerializer(serializers.ModelSerializer):
 
 
 class ProposalDetailSerializer(serializers.ModelSerializer):
-    logvote_set = LogVoteSerializer(many=True, read_only=True)
 
     class Meta:
         model = Proposal
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'is_simple_proposal',
-            'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result', 'logvote_set',
+            'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',
         ]
