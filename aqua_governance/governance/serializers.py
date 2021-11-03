@@ -14,7 +14,7 @@ class ProposalListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Proposal
-        fields = ['id', 'proposed_by', 'title', 'text', 'start_at', 'end_at']
+        fields = ['id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'vote_for_result', 'vote_against_result']
 
 
 class ProposalDetailSerializer(serializers.ModelSerializer):
@@ -22,4 +22,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Proposal
-        fields = ['id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'logvote_set']
+        fields = [
+            'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at',
+            'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',  'logvote_set',
+        ]
