@@ -24,5 +24,5 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
         model = Proposal
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at',
-            'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',  'logvote_set',
+            'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result', 'logvote_set',
         ]
