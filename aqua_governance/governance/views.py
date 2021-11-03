@@ -8,6 +8,7 @@ from rest_framework.viewsets import GenericViewSet
 
 from aqua_governance.governance.filters import HideFilterBackend
 from aqua_governance.governance.models import LogVote, Proposal
+from aqua_governance.governance.pagination import CustomPageNumberPagination
 from aqua_governance.governance.serializers import LogVoteSerializer, ProposalDetailSerializer, ProposalListSerializer
 
 
@@ -17,6 +18,7 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
     )
     permission_classes = (AllowAny, )
     serializer_class = ProposalListSerializer
+    pagination_class = CustomPageNumberPagination
     filter_backends = (
         HideFilterBackend,
         OrderingFilter,
@@ -33,6 +35,7 @@ class LogVoteView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
     queryset = LogVote.objects.all()
     permission_classes = (AllowAny, )
     serializer_class = LogVoteSerializer
+    pagination_class = CustomPageNumberPagination
     filter_backends = (
         OrderingFilter,
     )
