@@ -4,7 +4,7 @@ from django.db import models
 class Proposal(models.Model):
     proposed_by = models.CharField(max_length=56)
     title = models.CharField(max_length=256)
-    text = models.CharField(max_length=256)
+    text = models.TextField()
 
     vote_for_issuer = models.CharField(max_length=56)
     vote_against_issuer = models.CharField(max_length=56)
