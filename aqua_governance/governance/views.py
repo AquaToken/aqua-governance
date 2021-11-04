@@ -30,12 +30,6 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
             return ProposalDetailSerializer
         return super().get_serializer_class()
 
-    def retrieve(self, request, *args, **kwargs):
-        response = super(ProposalsView, self).retrieve(request, *args, **kwargs)
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'GET,OPTIONS'
-        return response
-
 
 class LogVoteView(ListModelMixin, GenericViewSet):
     queryset = LogVote.objects.all()
@@ -55,9 +49,3 @@ class LogVoteView(ListModelMixin, GenericViewSet):
         queryset = super(LogVoteView, self).get_queryset()
 
         return queryset.filter(proposal=proposal_id)
-
-    def list(self, request, *args, **kwargs):
-        response = super(LogVoteView, self).list(request, *args, **kwargs)
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'GET,OPTIONS'
-        return response

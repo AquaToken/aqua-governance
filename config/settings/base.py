@@ -1,8 +1,7 @@
 import environ
-
-
 # Build paths inside the project like this: root(...)
 from corsheaders.defaults import default_headers
+
 
 env = environ.Env()
 
