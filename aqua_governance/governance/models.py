@@ -28,6 +28,7 @@ class LogVote(models.Model):
         (VOTE_AGAINST, 'Vote Against'),
     )
     claimable_balance_id = models.CharField(max_length=72, unique=True, null=True)
+    transaction_link = models.URLField(null=True)
     account_issuer = models.CharField(max_length=56, null=True)
     amount = models.DecimalField(decimal_places=7, max_digits=20, blank=True, null=True)
     proposal = models.ForeignKey(Proposal, on_delete=models.CASCADE, null=True)

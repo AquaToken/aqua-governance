@@ -13,3 +13,9 @@ class MarketKeyAdmin(admin.ModelAdmin):
         'vote_for_result', 'vote_against_result',
     ]
     list_filter = ('start_at', 'end_at')
+
+    def get_readonly_fields(self, request, obj=None):
+        if obj:
+            return self.readonly_fields + ['start_at', 'end_at', 'vote_for_issuer', 'vote_against_issuer']
+
+        return self.readonly_fields

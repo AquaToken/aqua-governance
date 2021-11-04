@@ -7,7 +7,7 @@ class LogVoteSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = LogVote
-        fields = ['account_issuer', 'vote_choice', 'amount']
+        fields = ['account_issuer', 'vote_choice', 'amount', 'transaction_link']
 
 
 class ProposalListSerializer(serializers.ModelSerializer):

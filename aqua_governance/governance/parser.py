@@ -7,6 +7,7 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
     amount = claimable_balance['amount']
     sponsor = claimable_balance['sponsor']
     last_modified_time = claimable_balance['last_modified_time']
+    transaction_link = claimable_balance['_links']['transactions']['href'].replace('{?cursor,limit,order}', '')
 
     return LogVote(
         claimable_balance_id=balance_id,
@@ -15,4 +16,5 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
         amount=amount,
         account_issuer=sponsor,
         created_at=last_modified_time,
+        transaction_link=transaction_link,
     )
