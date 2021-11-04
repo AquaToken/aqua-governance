@@ -30,13 +30,6 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
             return ProposalDetailSerializer
         return super().get_serializer_class()
 
-    # TODO refactor
-    def list(self, request, *args, **kwargs):
-        response = super(ProposalsView, self).list(request, *args, **kwargs)
-        response.headers['Access-Control-Allow-Origin'] = '*'
-        response.headers['Access-Control-Allow-Methods'] = 'GET,OPTIONS'
-        return response
-
     def retrieve(self, request, *args, **kwargs):
         response = super(ProposalsView, self).retrieve(request, *args, **kwargs)
         response.headers['Access-Control-Allow-Origin'] = '*'
