@@ -2,17 +2,22 @@ from django.db.models import Prefetch
 from django.http import Http404
 
 from rest_framework.filters import OrderingFilter
-from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
+from rest_framework.mixins import CreateModelMixin, ListModelMixin, RetrieveModelMixin
 from rest_framework.permissions import AllowAny
 from rest_framework.viewsets import GenericViewSet
 
 from aqua_governance.governance.filters import HideFilterBackend
 from aqua_governance.governance.models import LogVote, Proposal
 from aqua_governance.governance.pagination import CustomPageNumberPagination
-from aqua_governance.governance.serializers import LogVoteSerializer, ProposalDetailSerializer, ProposalListSerializer
+from aqua_governance.governance.serializers import (
+    LogVoteSerializer,
+    ProposalCreateSerializer,
+    ProposalDetailSerializer,
+    ProposalListSerializer,
+)
 
 
-class ProposalsView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
+class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, GenericViewSet):
     queryset = Proposal.objects.all().prefetch_related(
         Prefetch('logvote_set', LogVote.objects.all().order_by('-created_at')),
     )
@@ -28,6 +33,8 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
     def get_serializer_class(self):
         if self.action == 'retrieve':
             return ProposalDetailSerializer
+        elif self.action == 'create':
+            return ProposalCreateSerializer
         return super().get_serializer_class()
 
     # TODO refactor

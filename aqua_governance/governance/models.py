@@ -1,5 +1,7 @@
 from django.db import models
 
+from stellar_sdk import Keypair
+
 
 class Proposal(models.Model):
     proposed_by = models.CharField(max_length=56)
@@ -18,6 +20,18 @@ class Proposal(models.Model):
 
     vote_for_result = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True, null=True)
     vote_against_result = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True, null=True)
+
+    transaction_hash = models.CharField(max_length=64, unique=True, null=True)
+
+    def save(self, force_insert=False, force_update=False, using=None,
+             update_fields=None):
+        if not self.vote_against_issuer:
+            keypair = Keypair.random()
+            self.vote_against_issuer = keypair.public_key
+        if not self.vote_for_issuer:
+            keypair = Keypair.random()
+            self.vote_for_issuer = keypair.public_key
+        super(Proposal, self).save(force_insert, force_update, using, update_fields)
 
 
 class LogVote(models.Model):
