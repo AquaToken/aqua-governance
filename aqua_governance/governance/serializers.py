@@ -1,4 +1,12 @@
+import base64
+import hashlib
+
+from django.conf import settings
+
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
+
+from stellar_sdk import HashMemo, Server
 
 from aqua_governance.governance.models import LogVote, Proposal
 
@@ -28,3 +36,33 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'is_simple_proposal',
             'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',
         ]
+
+
+class ProposalCreateSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = Proposal
+        fields = [
+            'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
+        ]
+        extra_kwargs = {
+            'transaction_hash': {'required': True},
+        }
+
+    def validate(self, data):
+        data = super(ProposalCreateSerializer, self).validate(data)
+
+        tx_hash = data.get('transaction_hash', None)
+        horizon_server = Server(settings.HORIZON_URL)
+        transaction_info = horizon_server.transactions().transaction(tx_hash).call()
+
+        memo = transaction_info.get('memo', None)
+        if not memo:
+            raise ValidationError('memo missed')
+
+        text_hash = hashlib.sha256(data['text'].encode('utf-8')).hexdigest()
+
+        if not base64.b64encode(HashMemo(text_hash).memo_hash).decode() == memo:
+            raise ValidationError('invalid memo')
+
+        return data
