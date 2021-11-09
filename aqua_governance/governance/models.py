@@ -1,4 +1,5 @@
 from django.db import models
+from django_quill.fields import QuillField
 
 from stellar_sdk import Keypair
 
@@ -6,7 +7,7 @@ from stellar_sdk import Keypair
 class Proposal(models.Model):
     proposed_by = models.CharField(max_length=56)
     title = models.CharField(max_length=256)
-    text = models.TextField()
+    text = QuillField()
 
     vote_for_issuer = models.CharField(max_length=56)
     vote_against_issuer = models.CharField(max_length=56)

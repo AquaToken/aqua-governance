@@ -37,6 +37,7 @@ gunicorn = "*"
 Django = ">=3.2,<4.0"
 stellar-sdk = "==5.0.0"
 django-cors-headers = "*"
+django-quill-editor = "*"
 
 [requires]
 python_version = "3.9"
