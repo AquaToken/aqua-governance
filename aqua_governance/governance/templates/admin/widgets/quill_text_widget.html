@@ -1,12 +1,10 @@
 {% load static %}
-<div class="vLargeTextField django-quill-widget-container">
+<div class="xLargeTextField django-quill-widget-container">
     <div id="quill-{{ id }}" class="django-quill-widget" data-config="{{ config }}" data-type="django-quill"></div>
     <input id="quill-input-{{ id }}" name="{{ name }}" type="hidden">
     <script>
         (function () {
             var wrapper = new QuillWrapper('quill-{{ id }}', 'quill-input-{{ id }}', JSON.parse('{{ config|safe }}'));
-            console.log({{quill.json_string|safe}}['html'])
-<!--            wrapper.quill.clipboard.dangerouslyPasteHTML(0, 'JSON.parse({{html|safe}})')-->
             wrapper.quill.clipboard.dangerouslyPasteHTML(0, {{quill.json_string|safe}}['html'])
 
         })();
