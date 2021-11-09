@@ -1,6 +1,6 @@
 from django.db import models
-from django_quill.fields import QuillField
 
+from django_quill.fields import QuillField
 from stellar_sdk import Keypair
 
 

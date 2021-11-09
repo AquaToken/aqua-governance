@@ -192,15 +192,26 @@ QUILL_CONFIGS = {
             'syntax': True,
             'toolbar': [
                 [
-                    {'font': []},
                     {'header': []},
-                    {'align': []},
-                    'bold', 'italic', 'underline', 'strike', 'blockquote',
-                    {'color': []},
-                    {'background': []},
+                    'bold', 'italic', 'underline',
                 ],
-                ['code-block', 'link'],
+                [{'list': 'ordered'}, {'list': 'bullet'}],
+                ['link'],
                 ['clean'],
+                # Example with all toolbars
+                # ['bold', 'italic', 'underline', 'strike'],
+                # ['blockquote', 'code-block'],
+                # [{ 'header': 1 }, { 'header': 2 }],
+                # [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+                # [{ 'script': 'sub'}, { 'script': 'super' }],
+                # [{ 'indent': '-1'}, { 'indent': '+1' }],
+                # [{ 'direction': 'rtl' }],
+                # [{ 'size': ['small', False, 'large', 'huge'] }],
+                # [{ 'header': [1, 2, 3, 4, 5, 6, False] }],
+                # [{ 'color': [] }, { 'background': [] }],
+                # [{ 'font': [] }],
+                # [{ 'align': [] }],
+                # ['clean']
             ]
         }
     }
