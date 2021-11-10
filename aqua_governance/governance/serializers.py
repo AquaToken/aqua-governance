@@ -77,7 +77,7 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         if not memo:
             raise ValidationError('memo missed')
 
-        text_hash = hashlib.sha256(data['text'].encode('utf-8')).hexdigest()
+        text_hash = hashlib.sha256(data['text'].html.encode('utf-8')).hexdigest()
 
         if not base64.b64encode(HashMemo(text_hash).memo_hash).decode() == memo:
             raise ValidationError('invalid memo')
