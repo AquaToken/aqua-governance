@@ -36,6 +36,7 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     'corsheaders',
+    'django_quill',
 ]
 
 LOCAL_APPS = [
@@ -180,3 +181,24 @@ REST_FRAMEWORK = {
 # ---------------------
 CORS_ORIGIN_ALLOW_ALL = True
 CORS_ALLOW_HEADERS = list(default_headers)
+
+
+# QUILL settings
+# ---------------------
+QUILL_CONFIGS = {
+    'default': {
+        'theme': 'snow',
+        'modules': {
+            'syntax': True,
+            'toolbar': [
+                [
+                    {'header': []},
+                    'bold', 'italic', 'underline',
+                ],
+                [{'list': 'ordered'}, {'list': 'bullet'}],
+                ['link'],
+                ['clean'],
+            ],
+        },
+    },
+}
