@@ -22,7 +22,7 @@ class CustomQuillWidget(QuillWidget):
             attrs['value'] = value
             html = value.html if hasattr(value, 'html') else ''
         final_attrs = self.build_attrs(self.attrs, attrs)
-        return mark_safe(renderer.render('admin/widgets/quill_text_widget.html', {
+        return mark_safe(renderer.render('admin/widgets/quill_text_widget.html', { # NOQA S703
             'final_attrs': flatatt(final_attrs),
             'id': final_attrs['id'],
             'name': final_attrs['name'],
