@@ -5,7 +5,7 @@ from aqua_governance.governance.models import Proposal
 
 
 @admin.register(Proposal)
-class MarketKeyAdmin(admin.ModelAdmin):
+class ProposalAdmin(admin.ModelAdmin):
     list_display = ['proposed_by', 'title', 'start_at', 'end_at']
     readonly_fields = ['vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result']
     search_fields = ['proposed_by']
@@ -15,6 +15,11 @@ class MarketKeyAdmin(admin.ModelAdmin):
     ]
     list_filter = ('start_at', 'end_at')
     form = ProposalAdminForm
+
+    class Media:
+        css = {
+            'all': ('admin/django_quill.css',)
+        }
 
     def get_readonly_fields(self, request, obj=None):
         if obj:

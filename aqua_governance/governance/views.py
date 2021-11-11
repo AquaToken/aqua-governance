@@ -6,7 +6,6 @@ from rest_framework.mixins import CreateModelMixin, ListModelMixin, RetrieveMode
 from rest_framework.permissions import AllowAny
 from rest_framework.viewsets import GenericViewSet
 
-from aqua_governance.governance.filters import HideFilterBackend
 from aqua_governance.governance.models import LogVote, Proposal
 from aqua_governance.governance.pagination import CustomPageNumberPagination
 from aqua_governance.governance.serializers import (
@@ -25,7 +24,6 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, Generi
     serializer_class = ProposalListSerializer
     pagination_class = CustomPageNumberPagination
     filter_backends = (
-        HideFilterBackend,
         OrderingFilter,
     )
     ordering = ['created_at']

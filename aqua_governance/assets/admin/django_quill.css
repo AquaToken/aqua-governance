@@ -1,0 +1,10 @@
+.ql-editor h2 {
+    color: var(--body-quiet-color);
+    background:none;
+}
+.ql-editor ul {
+    padding-left: 1.5em !important;
+    margin-left: 0px !important;
+}
+
+
