@@ -11,6 +11,7 @@ from django_quill.quill import Quill
 from stellar_sdk import HashMemo, Server
 
 from aqua_governance.governance.models import LogVote, Proposal
+from aqua_governance.utils.payments import check_payment
 
 
 class LogVoteSerializer(serializers.ModelSerializer):
@@ -72,6 +73,9 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         tx_hash = data.get('transaction_hash', None)
         horizon_server = Server(settings.HORIZON_URL)
         transaction_info = horizon_server.transactions().transaction(tx_hash).call()
+
+        if not check_payment(tx_hash):
+            raise ValidationError('invalid payment')
 
         memo = transaction_info.get('memo', None)
         if not memo:
