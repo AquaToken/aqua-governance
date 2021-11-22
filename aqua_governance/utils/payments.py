@@ -5,7 +5,7 @@ from stellar_sdk import Server
 from aqua_governance.utils.requests import load_all_records
 
 
-PROPOSAL_COST = 1
+PROPOSAL_COST = 1000000
 AQUA_ASSET_CODE = 'AQUA'
 AQUA_ASSET_ISSUER = 'GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA'
 
