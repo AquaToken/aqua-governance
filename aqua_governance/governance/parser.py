@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from aqua_governance.governance.models import LogVote, Proposal
-from dateutil.parser import parse as date_parse
+# from dateutil.parser import parse as date_parse
 
 
 def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice: str):
@@ -14,14 +14,14 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
 
     claimants = claimable_balance['claimants']
 
-    time_list = []
-    for claimant in claimants:
-        if claimant['destination'] == sponsor:
-            abs_before = claimant.get('predicate', None).get('not', None).get('abs_before', None)
-            if abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1):
-                time_list.append(abs_before)
-    if not time_list:
-        return None
+    # time_list = []
+    # for claimant in claimants:
+    #     if claimant['destination'] == sponsor:
+    #         abs_before = claimant.get('predicate', None).get('not', None).get('abs_before', None)
+    #         if abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1):
+    #             time_list.append(abs_before)
+    # if not time_list:
+    #     return None
 
     return LogVote(
         claimable_balance_id=balance_id,
