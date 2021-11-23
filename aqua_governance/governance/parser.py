@@ -1,7 +1,8 @@
 from datetime import timedelta
 
-from aqua_governance.governance.models import LogVote, Proposal
 from dateutil.parser import parse as date_parse
+
+from aqua_governance.governance.models import LogVote, Proposal
 
 
 def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice: str):
