@@ -6,12 +6,14 @@ from aqua_governance.governance.models import LogVote, Proposal
 
 @admin.register(Proposal)
 class ProposalAdmin(admin.ModelAdmin):
-    list_display = ['proposed_by', 'title', 'start_at', 'end_at']
-    readonly_fields = ['vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result']
+    list_display = ['proposed_by', 'title', 'start_at', 'end_at', '_list_display_quorum']
+    readonly_fields = [
+        'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result', 'aqua_circulating_supply',
+    ]
     search_fields = ['proposed_by']
     fields = [
         'proposed_by', 'title', 'text', 'vote_for_issuer', 'vote_against_issuer', 'start_at', 'end_at', 'hide',
-        'vote_for_result', 'vote_against_result',
+        'vote_for_result', 'vote_against_result', 'aqua_circulating_supply',
     ]
     list_filter = ('start_at', 'end_at')
     form = ProposalAdminForm
@@ -26,6 +28,12 @@ class ProposalAdmin(admin.ModelAdmin):
             return self.readonly_fields + ['start_at', 'end_at']
 
         return self.readonly_fields
+
+    def _list_display_quorum(self, obj):
+        if obj.vote_for_result + obj.vote_against_result >= float(obj.aqua_circulating_supply) * 0.05:
+            return 'Enough votes'
+        return 'Not enough votes'
+    _list_display_quorum.short_description = 'quorum'
 
 
 @admin.register(LogVote)
