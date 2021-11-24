@@ -40,7 +40,7 @@ class ProposalListSerializer(serializers.ModelSerializer):
         model = Proposal
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'vote_for_result', 'vote_against_result',
-            'is_simple_proposal',
+            'is_simple_proposal', 'aqua_circulating_supply',
         ]
 
 
@@ -52,6 +52,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'is_simple_proposal',
             'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',
+            'aqua_circulating_supply',
         ]
 
 

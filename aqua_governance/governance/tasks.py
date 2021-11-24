@@ -3,6 +3,7 @@ import sys
 from datetime import datetime
 from typing import Optional
 
+import requests
 from django.conf import settings
 
 from stellar_sdk import Asset, Server
@@ -42,8 +43,12 @@ def _update_proposal_final_results(proposal_id):
     proposal.vote_for_result = vote_for_result
     proposal.vote_against_result = vote_against_result
 
+    response = requests.get(settings.AQUA_CIRCULATING_URL)
+    if response.status_code == 200:
+        proposal.aqua_circulating_supply = response.json()
+
     with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-        proposal.save(update_fields=['vote_for_result', 'vote_against_result'])
+        proposal.save(update_fields=['vote_for_result', 'vote_against_result', 'aqua_circulating_supply'])
 
 
 @celery_app.task(ignore_result=True)

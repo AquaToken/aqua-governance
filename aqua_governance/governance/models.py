@@ -1,3 +1,5 @@
+import requests
+from django.conf import settings
 from django.db import models
 
 from django_quill.fields import QuillField
@@ -24,14 +26,21 @@ class Proposal(models.Model):
 
     transaction_hash = models.CharField(max_length=64, unique=True, null=True)
 
-    def save(self, force_insert=False, force_update=False, using=None,
-             update_fields=None):
+    aqua_circulating_supply = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True)
+
+    def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
         if not self.vote_against_issuer:
             keypair = Keypair.random()
             self.vote_against_issuer = keypair.public_key
         if not self.vote_for_issuer:
             keypair = Keypair.random()
             self.vote_for_issuer = keypair.public_key
+
+        if not self.pk:
+            response = requests.get(settings.AQUA_CIRCULATING_URL)
+            if response.status_code == 200:
+                self.aqua_circulating_supply = response.json()
+
         super(Proposal, self).save(force_insert, force_update, using, update_fields)
 
 
