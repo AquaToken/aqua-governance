@@ -28,6 +28,9 @@ class Proposal(models.Model):
 
     aqua_circulating_supply = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True)
 
+    discord_channel_url = models.URLField(blank=True, null=True)
+    discord_channel_name = models.CharField(max_length=64, blank=True, null=True)
+
     def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
         if not self.vote_against_issuer:
             keypair = Keypair.random()
