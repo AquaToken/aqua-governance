@@ -13,7 +13,8 @@ class ProposalAdmin(admin.ModelAdmin):
     search_fields = ['proposed_by']
     fields = [
         'proposed_by', 'title', 'text', 'vote_for_issuer', 'vote_against_issuer', 'start_at', 'end_at', 'hide',
-        'vote_for_result', 'vote_against_result', 'aqua_circulating_supply',
+        'vote_for_result', 'vote_against_result', 'aqua_circulating_supply', 'discord_channel_url',
+        'discord_channel_name',
     ]
     list_filter = ('start_at', 'end_at')
     form = ProposalAdminForm
