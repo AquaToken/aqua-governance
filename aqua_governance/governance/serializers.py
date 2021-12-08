@@ -53,7 +53,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'is_simple_proposal',
             'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',
-            'aqua_circulating_supply', 'discord_channel_url', 'discord_channel_name',
+            'aqua_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
         ]
 
 
