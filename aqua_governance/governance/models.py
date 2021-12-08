@@ -19,7 +19,6 @@ class Proposal(models.Model):
     end_at = models.DateTimeField()
 
     hide = models.BooleanField(default=False)
-    hidden_after_creation = models.BooleanField(default=False)
     is_simple_proposal = models.BooleanField(default=True)
 
     vote_for_result = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True, null=True)
