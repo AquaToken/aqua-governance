@@ -30,6 +30,7 @@ class Proposal(models.Model):
 
     discord_channel_url = models.URLField(blank=True, null=True)
     discord_channel_name = models.CharField(max_length=64, blank=True, null=True)
+    discord_username = models.CharField(max_length=64, blank=True, null=True)
 
     def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
         if not self.vote_against_issuer:
