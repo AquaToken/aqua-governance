@@ -70,6 +70,7 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         data = super(ProposalCreateSerializer, self).validate(data)
+        data['hidden_after_creation'] = True
 
         tx_hash = data.get('transaction_hash', None)
         horizon_server = Server(settings.HORIZON_URL)
