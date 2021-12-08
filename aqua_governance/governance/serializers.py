@@ -8,7 +8,6 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
 from django_quill.quill import Quill
-from rest_framework.validators import UniqueTogetherValidator
 from stellar_sdk import HashMemo, Server
 
 from aqua_governance.governance.models import LogVote, Proposal
@@ -60,7 +59,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
 
 class ProposalCreateSerializer(serializers.ModelSerializer):
     text = QuillField()
-    # discord_username = serializers.CharField(required=False, allow_null=True, validators=[DiscordUsernameValidator(), ])
+    discord_username = serializers.CharField(required=False, allow_null=True, validators=[DiscordUsernameValidator(), ])
 
     class Meta:
         model = Proposal
@@ -70,7 +69,7 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {
             'transaction_hash': {'required': True},
-            'discord_channel_name': {'required': True},
+            # 'discord_channel_name': {'required': True},
         }
 
     def validate(self, data):
