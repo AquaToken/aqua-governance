@@ -11,6 +11,7 @@ from django_quill.quill import Quill
 from stellar_sdk import HashMemo, Server
 
 from aqua_governance.governance.models import LogVote, Proposal
+from aqua_governance.governance.validators import DiscordUsernameValidator
 from aqua_governance.utils.payments import check_payment
 
 
@@ -58,14 +59,17 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
 
 class ProposalCreateSerializer(serializers.ModelSerializer):
     text = QuillField()
+    discord_username = serializers.CharField(required=False, allow_null=True, validators=[DiscordUsernameValidator(), ])
 
     class Meta:
         model = Proposal
         fields = [
             'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
+            'discord_channel_name', 'discord_username',
         ]
         extra_kwargs = {
             'transaction_hash': {'required': True},
+            # 'discord_channel_name': {'required': True},
         }
 
     def validate(self, data):
