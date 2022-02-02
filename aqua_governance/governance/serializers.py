@@ -85,6 +85,9 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
             data['status'] = Proposal.HORIZON_ERROR
             return data
 
+        if not transaction_info.get('successfull', None):
+            data['status'] = Proposal.FAILED_TRANSACTION
+
         if not check_payment(tx_hash):
             data['status'] = Proposal.INVALID_PAYMENT
 

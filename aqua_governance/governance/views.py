@@ -73,5 +73,3 @@ class ProposalCreateViewSet(UpdateModelMixin, CreateModelMixin, GenericViewSet):
         if self.action == 'update' or self.action == 'partial_update':
             return ProposalUpdateSerializer
         return super().get_serializer_class()
-
-
