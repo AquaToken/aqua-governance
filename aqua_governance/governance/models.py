@@ -7,6 +7,19 @@ from stellar_sdk import Keypair
 
 
 class Proposal(models.Model):
+    HORIZON_ERROR = 'HORIZON_ERROR'
+    BAD_MEMO = 'BAD_MEMO'
+    INVALID_PAYMENT = 'INVALID_PAYMENT'
+    FINE = 'FINE'
+    FAILED_TRANSACTION = 'FAILED_TRANSACTION'
+
+    PROPOSAL_STATUS_CHOICES = (
+        (HORIZON_ERROR, 'Bad horizon response'),
+        (BAD_MEMO, 'Bad transaction memo'),
+        (INVALID_PAYMENT, 'Invalid payment'),
+        (FINE, 'Fine'),
+        (FAILED_TRANSACTION, 'Transaction unsuccessful'),
+    )
     proposed_by = models.CharField(max_length=56)
     title = models.CharField(max_length=256)
     text = QuillField()
@@ -20,11 +33,15 @@ class Proposal(models.Model):
 
     hide = models.BooleanField(default=False)
     is_simple_proposal = models.BooleanField(default=True)
+    draft = models.BooleanField(default=False)
+
+    status = models.CharField(choices=PROPOSAL_STATUS_CHOICES, max_length=64, default=FINE)
 
     vote_for_result = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True, null=True)
     vote_against_result = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True, null=True)
 
     transaction_hash = models.CharField(max_length=64, unique=True, null=True)
+    envelope_xdr = models.TextField(null=True, blank=True)
 
     aqua_circulating_supply = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True)
 

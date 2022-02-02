@@ -8,11 +8,11 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
 from django_quill.quill import Quill
-from stellar_sdk import HashMemo, Server
+from stellar_sdk import HashMemo, Server, TransactionEnvelope
 
 from aqua_governance.governance.models import LogVote, Proposal
 from aqua_governance.governance.validators import DiscordUsernameValidator
-from aqua_governance.utils.payments import check_payment
+from aqua_governance.utils.payments import check_payment, check_xdr_payment, check_proposal_status
 
 
 class LogVoteSerializer(serializers.ModelSerializer):
@@ -65,8 +65,9 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         model = Proposal
         fields = [
             'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
-            'discord_channel_name', 'discord_username',
+            'discord_channel_name', 'discord_username', 'status',
         ]
+        read_only_fields = ['status', ]
         extra_kwargs = {
             'transaction_hash': {'required': True},
             # 'discord_channel_name': {'required': True},
@@ -78,18 +79,84 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
 
         tx_hash = data.get('transaction_hash', None)
         horizon_server = Server(settings.HORIZON_URL)
-        transaction_info = horizon_server.transactions().transaction(tx_hash).call()
+        try:
+            transaction_info = horizon_server.transactions().transaction(tx_hash).call()
+        except Exception:
+            data['status'] = Proposal.HORIZON_ERROR
+            return data
+
+        if not transaction_info.get('successfull', None):
+            data['status'] = Proposal.FAILED_TRANSACTION
 
         if not check_payment(tx_hash):
-            raise ValidationError('invalid payment')
+            data['status'] = Proposal.INVALID_PAYMENT
 
         memo = transaction_info.get('memo', None)
         if not memo:
-            raise ValidationError('memo missed')
+            data['status'] = Proposal.BAD_MEMO
 
         text_hash = hashlib.sha256(data['text'].html.encode('utf-8')).hexdigest()
 
         if not base64.b64encode(HashMemo(text_hash).memo_hash).decode() == memo:
-            raise ValidationError('invalid memo')
+            data['status'] = Proposal.BAD_MEMO
 
         return data
+
+
+class ProposalCreateSerializerV2(serializers.ModelSerializer):
+    text = QuillField()
+    discord_username = serializers.CharField(required=False, allow_null=True, validators=[DiscordUsernameValidator(), ])
+
+    class Meta:
+        model = Proposal
+        fields = [
+            'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
+            'discord_channel_name', 'discord_username', 'status', 'envelope_xdr',
+        ]
+        extra_kwargs = {
+            'envelope_xdr': {'required': True},
+            'transaction_hash': {'required': True},
+        }
+
+    def validate(self, data):
+        data = super(ProposalCreateSerializerV2, self).validate(data)
+        data['hide'] = True
+        data['draft'] = True
+
+        envelope_xdr = data.get('envelope_xdr', None)
+        try:
+            transaction_envelope = TransactionEnvelope.from_xdr(envelope_xdr, settings.NETWORK_PASSPHRASE)
+        except Exception:
+            data['status'] = Proposal.HORIZON_ERROR
+            return data
+
+        if not check_xdr_payment(transaction_envelope):
+            data['status'] = Proposal.INVALID_PAYMENT
+
+        memo = transaction_envelope.transaction.memo
+        text_hash = hashlib.sha256(data['text'].html.encode('utf-8')).hexdigest()
+
+        if not isinstance(memo, HashMemo) or not HashMemo(text_hash).memo_hash == memo.memo_hash:
+            data['status'] = Proposal.BAD_MEMO
+
+        return data
+
+
+class ProposalUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Proposal
+        fields = [
+            'draft', 'transaction_hash', 'status', 'envelope_xdr',
+        ]
+        read_only_fields = [
+            'draft', 'transaction_hash', 'status', 'envelope_xdr',
+        ]
+
+    def update(self, instance, validated_data):
+        validated_data['draft'] = True
+        status = check_proposal_status(instance)
+        if status == Proposal.FINE:
+            validated_data['draft'] = False
+        validated_data['status'] = status
+
+        return super(ProposalUpdateSerializer, self).update(instance, validated_data)

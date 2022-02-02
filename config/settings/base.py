@@ -1,7 +1,7 @@
 import environ
 # Build paths inside the project like this: root(...)
 from corsheaders.defaults import default_headers
-
+from stellar_sdk import Network
 
 env = environ.Env()
 
@@ -209,3 +209,8 @@ QUILL_CONFIGS = {
 AQUA_ASSET_CODE = 'AQUA'
 AQUA_ASSET_ISSUER = 'GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA'
 AQUA_CIRCULATING_URL = 'https://cmc.aqua.network/api/coins/?q=circulating'
+
+PROPOSAL_COST = 1000000
+
+
+NETWORK_PASSPHRASE = Network.public_network().network_passphrase
