@@ -46,7 +46,7 @@ def check_proposal_status(instance):
         return Proposal.HORIZON_ERROR
 
     proposal = Proposal.objects.get(transaction_hash=instance.transaction_hash)
-    if not transaction_info.get('successfull', None):
+    if not transaction_info.get('successful', None):
         return Proposal.FAILED_TRANSACTION
     if not check_payment(instance.transaction_hash):
         return Proposal.INVALID_PAYMENT
