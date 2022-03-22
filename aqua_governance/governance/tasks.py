@@ -1,6 +1,6 @@
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import requests
@@ -83,9 +83,25 @@ def task_update_proposal_result(proposal_id):
 
 
 @celery_app.task(ignore_result=True)
+def task_update_proposal_status(proposal_id):
+    proposal = Proposal.objects.get(id=proposal_id)
+    if proposal.end_at <= datetime.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
+        proposal.proposal_status = Proposal.VOTED
+        proposal.save()
+        task_update_proposal_result.delay(proposal_id)
+
+
+@celery_app.task(ignore_result=True)
 def task_update_active_proposals():
     now = datetime.now()
     active_proposals = Proposal.objects.filter(start_at__lte=now, end_at__gte=now)
 
     for proposal in active_proposals:
         task_update_proposal_result.delay(proposal.id)
+
+
+@celery_app.task(ignore_result=True)
+def task_check_expired_proposals():
+    expired_period = datetime.now() - settings.EXPIRED_TIMEDELTA
+    proposals = Proposal.objects.filter(proposal_status=Proposal.DISCUSSION, last_updated__lte=expired_period)
+    proposals.update(proposal_status=Proposal.EXPIRED, hide=True)
