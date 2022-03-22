@@ -6,7 +6,9 @@ from aqua_governance.governance.models import LogVote, Proposal
 
 @admin.register(Proposal)
 class ProposalAdmin(admin.ModelAdmin):
-    list_display = ['proposed_by', 'hide', 'status', 'title', 'start_at', 'end_at', '_list_display_quorum']
+    list_display = [
+        'proposed_by', 'hide', 'status', 'title', 'start_at', 'end_at', '_list_display_quorum',
+    ]
     readonly_fields = [
         'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result', 'aqua_circulating_supply',
     ]
@@ -14,7 +16,7 @@ class ProposalAdmin(admin.ModelAdmin):
     fields = [
         'proposed_by', 'title', 'text', 'vote_for_issuer', 'vote_against_issuer', 'start_at', 'end_at', 'hide',
         'vote_for_result', 'vote_against_result', 'aqua_circulating_supply', 'discord_channel_url',
-        'discord_channel_name', 'discord_username',
+        'discord_channel_name', 'discord_username', 'proposal_status', 'payment_status',
     ]
     list_filter = ('start_at', 'end_at')
     form = ProposalAdminForm
