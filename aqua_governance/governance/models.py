@@ -52,8 +52,8 @@ class Proposal(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     last_updated_at = models.DateTimeField(auto_now_add=True)
-    start_at = models.DateTimeField()
-    end_at = models.DateTimeField()
+    start_at = models.DateTimeField(null=True, blank=True)
+    end_at = models.DateTimeField(null=True, blank=True)
 
     hide = models.BooleanField(default=False)
     is_simple_proposal = models.BooleanField(default=True)  # for future custom voting options
@@ -76,6 +76,9 @@ class Proposal(models.Model):
     discord_username = models.CharField(max_length=64, blank=True, null=True)
 
     voting_time_tracker = FieldTracker(fields=['end_at'])
+
+    def __str__(self):
+        return str(self.id)
 
     def check_transaction(self):
         from aqua_governance.utils.payments import check_proposal_status
@@ -123,6 +126,9 @@ class LogVote(models.Model):
     vote_choice = models.CharField(max_length=15, choices=VOTE_TYPES, default=None, null=True)
     created_at = models.DateTimeField(default=None, null=True)
 
+    def __str__(self):
+        return str(self.id)
+
 
 class HistoryProposal(models.Model):
     version = models.PositiveSmallIntegerField()
@@ -136,3 +142,6 @@ class HistoryProposal(models.Model):
     transaction_hash = models.CharField(max_length=64, unique=True, null=True)
     envelope_xdr = models.TextField(null=True, blank=True)
     proposal = models.ForeignKey(Proposal, related_name='history_proposal', on_delete=models.CASCADE, null=True)
+
+    def __str__(self):
+        return 'History proposal ' + self.id
