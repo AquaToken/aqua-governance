@@ -1,6 +1,6 @@
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 import requests
@@ -17,10 +17,6 @@ from aqua_governance.utils.signals import DisableSignals
 
 
 logger = logging.getLogger()
-
-
-AQUA_ASSET_CODE = 'AQUA'
-AQUA_ASSET_ISSUER = 'GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA'
 
 
 def _parse_claimable_balance(claimable_balance: dict, proposal: Proposal, log_vote: str) -> Optional[LogVote]:
@@ -60,13 +56,13 @@ def task_update_proposal_result(proposal_id):
     request_builders = (
         (
             horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
-                Asset(AQUA_ASSET_CODE, AQUA_ASSET_ISSUER),
+                Asset(settings.AQUA_ASSET_CODE, settings.AQUA_ASSET_ISSUER),
             ).order(desc=False),
             LogVote.VOTE_FOR,
         ),
         (
             horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
-                Asset(AQUA_ASSET_CODE, AQUA_ASSET_ISSUER),
+                Asset(settings.AQUA_ASSET_CODE, settings.AQUA_ASSET_ISSUER),
             ).order(desc=False),
             LogVote.VOTE_AGAINST,
         ),
@@ -83,9 +79,25 @@ def task_update_proposal_result(proposal_id):
 
 
 @celery_app.task(ignore_result=True)
+def task_update_proposal_status(proposal_id):
+    proposal = Proposal.objects.get(id=proposal_id)
+    if proposal.end_at <= datetime.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
+        proposal.proposal_status = Proposal.VOTED
+        proposal.save()
+        task_update_proposal_result.delay(proposal_id)
+
+
+@celery_app.task(ignore_result=True)
 def task_update_active_proposals():
     now = datetime.now()
-    active_proposals = Proposal.objects.filter(start_at__lte=now, end_at__gte=now)
+    active_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTING, start_at__lte=now, end_at__gte=now)
 
     for proposal in active_proposals:
         task_update_proposal_result.delay(proposal.id)
+
+
+@celery_app.task(ignore_result=True)
+def task_check_expired_proposals():
+    expired_period = datetime.now() - settings.EXPIRED_TIME
+    proposals = Proposal.objects.filter(proposal_status=Proposal.DISCUSSION, last_updated_at__lte=expired_period)
+    proposals.update(proposal_status=Proposal.EXPIRED, hide=True)

@@ -39,6 +39,7 @@ stellar-sdk = "==5.0.1"
 django-cors-headers = "*"
 django-quill-editor = "*"
 python-dateutil = "*"
+django-model-utils = "*"
 
 [requires]
 python_version = "3.9"
