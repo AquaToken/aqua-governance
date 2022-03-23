@@ -31,18 +31,6 @@ class HistoryProposalSerializer(serializers.ModelSerializer):
         fields = ['version', 'title', 'text']
 
 
-class QuillField(serializers.Field):
-    def get_attribute(self, instance):
-        return instance.text.html
-
-    def to_representation(self, value):
-        return value
-
-    def to_internal_value(self, data):
-        obj = {'delta': '', 'html': data}
-        return Quill(json.dumps(obj))
-
-
 class ProposalListSerializer(serializers.ModelSerializer):
     text = QuillField()
 
