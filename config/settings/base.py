@@ -1,6 +1,9 @@
+from datetime import timedelta
+
 import environ
 # Build paths inside the project like this: root(...)
 from corsheaders.defaults import default_headers
+from dateutil.relativedelta import relativedelta
 from stellar_sdk import Network
 
 env = environ.Env()
@@ -210,7 +213,10 @@ AQUA_ASSET_CODE = 'AQUA'
 AQUA_ASSET_ISSUER = 'GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA'
 AQUA_CIRCULATING_URL = 'https://cmc.aqua.network/api/coins/?q=circulating'
 
-PROPOSAL_COST = 1000000
+PROPOSAL_COST = 1000000  # TODO: remove it
+PROPOSAL_SUBMIT_COST = 1   # TODO: change amount
+PROPOSAL_CREATE_OR_UPDATE_COST = 1  # TODO: change amount
 
-
+EXPIRED_TIME = relativedelta(months=1)
+DISCUSSION_TIME = timedelta(days=7)
 NETWORK_PASSPHRASE = Network.public_network().network_passphrase
