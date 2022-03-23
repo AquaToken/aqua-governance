@@ -29,7 +29,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Proposal
         fields = [
-            'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'is_simple_proposal',
+            'id', 'version', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'is_simple_proposal',
             'proposal_status', 'payment_status',
             'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',
             'aqua_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
@@ -58,7 +58,6 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data['draft'] = True
-        validated_data['created_at'] = datetime.now() + timedelta(days=1)
         status = check_transaction_xdr(validated_data, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
         if status != Proposal.FINE:
             validated_data['hide'] = True
@@ -139,7 +138,9 @@ class SubmitSerializer(serializers.ModelSerializer):
             proposal=instance,
         )
         validated_data['draft'] = True
-        status = check_transaction_xdr(validated_data, settings.PROPOSAL_SUBMIT_COST)
+        data_to_check = {'text': instance.text}
+        data_to_check.update(validated_data)
+        status = check_transaction_xdr(data_to_check, settings.PROPOSAL_SUBMIT_COST)
         if status != Proposal.FINE:
             validated_data['hide'] = True
         validated_data['proposal_status'] = Proposal.VOTING

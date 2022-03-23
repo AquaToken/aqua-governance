@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from django.conf import settings
 from django.db.models import Prefetch
 from django.http import Http404
@@ -14,7 +16,7 @@ from rest_framework.viewsets import GenericViewSet
 from stellar_sdk import TransactionEnvelope
 
 from aqua_governance.governance.filters import ProposalStatusFilterBackend, ProposalOwnerFilterBackend
-from aqua_governance.governance.models import LogVote, Proposal
+from aqua_governance.governance.models import LogVote, Proposal, HistoryProposal
 from aqua_governance.governance.pagination import CustomPageNumberPagination
 from aqua_governance.governance.serializers import (
     LogVoteSerializer,
@@ -83,18 +85,19 @@ class ProposalViewSet(
     )
     ordering = ['created_at']
 
-    # def get_queryset(self):
-    #     queryset = super(ProposalViewSet, self).get_queryset()
-    #
-    #     # todo: can submit when last update was one week ago
-    #     if self.action == 'submit_proposal':
-    #         queryset = queryset.filter(
-    #         proposal_status=Proposal.DISCUSSION, last_updated_at__lte=datetime.now() - settings.DISCUSSION_TIME,
-    #         )
+    def get_queryset(self):
+        queryset = super(ProposalViewSet, self).get_queryset().prefetch_related(
+            Prefetch('history_proposal', HistoryProposal.objects.filter(hide=False))
+        )
 
-    #     if self.action == 'check_proposal_payment':
-    #         return queryset.filter(draft=True)
-    #     return queryset.filter(draft=False)
+        if self.action == 'submit_proposal':
+            queryset = queryset.filter(
+                proposal_status=Proposal.DISCUSSION, last_updated_at__lte=datetime.now() - settings.DISCUSSION_TIME,
+            )
+
+        if self.action == 'check_proposal_payment':
+            return queryset.filter(draft=True)
+        return queryset.filter(draft=False)
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -108,11 +111,7 @@ class ProposalViewSet(
 
         return super().get_serializer_class()
 
-    def partial_update(self, request, *args, **kwargs):
-        # disable partial update
-        return self.update(request, *args, **kwargs)
-
-    def _check_submit_permissions(self, proposal, data):
+    def _check_owner_permissions(self, proposal, data):
         envelope_xdr = data.get('envelope_xdr', None)
         try:
             transaction_envelope = TransactionEnvelope.from_xdr(envelope_xdr, settings.NETWORK_PASSPHRASE)
@@ -122,12 +121,21 @@ class ProposalViewSet(
         if transaction_envelope.transaction.source.account_id != proposal.proposed_by:
             raise PermissionDenied(detail='You are not the proposal owner')
 
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        self._check_owner_permissions(instance, request.data)
+        return super(ProposalViewSet, self).update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        # disable partial update
+        return self.update(request, *args, **kwargs)
+
     @action(detail=True, methods=['post'], url_path='submit', url_name='submit-proposal')
     def submit_proposal(self, request, pk=None):
         proposal = self.get_object()
         serializer = serializers_v2.SubmitSerializer(proposal, data=request.data)
         serializer.is_valid(raise_exception=True)
-        self._check_submit_permissions(proposal, request.data)
+        self._check_owner_permissions(proposal, request.data)
         serializer.save()
         return Response(data=serializer.data)
 
