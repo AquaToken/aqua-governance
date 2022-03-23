@@ -28,7 +28,7 @@ from aqua_governance.governance import serializers_v2
 
 
 class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, GenericViewSet):
-    queryset = Proposal.objects.filter(hide=False).prefetch_related(
+    queryset = Proposal.objects.filter(hide=False, draft=False).prefetch_related(
         Prefetch('logvote_set', LogVote.objects.all().order_by('-created_at')),
     )
     permission_classes = (AllowAny, )
