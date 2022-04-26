@@ -28,7 +28,7 @@ from aqua_governance.governance import serializers_v2
 
 
 class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, GenericViewSet):
-    queryset = Proposal.objects.filter(hide=False, draft=False).prefetch_related(
+    queryset = Proposal.objects.filter(hide=False, draft=False, created_at__lte=datetime(2022, 4, 15)).prefetch_related(
         Prefetch('logvote_set', LogVote.objects.all().order_by('-created_at')),
     )
     permission_classes = (AllowAny, )
@@ -121,10 +121,10 @@ class ProposalViewSet(
         if transaction_envelope.transaction.source.account_id != proposal.proposed_by:
             raise PermissionDenied(detail='You are not the proposal owner')
 
-    def update(self, request, *args, **kwargs):
+    def perform_update(self, serializer):
         instance = self.get_object()
-        self._check_owner_permissions(instance, request.data)
-        return super(ProposalViewSet, self).update(request, *args, **kwargs)
+        self._check_owner_permissions(instance, serializer.validated_data)
+        serializer.save()
 
     def partial_update(self, request, *args, **kwargs):
         # disable partial update

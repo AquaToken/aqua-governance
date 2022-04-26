@@ -89,11 +89,13 @@ class Proposal(models.Model):
             amount_to_be_checked = settings.PROPOSAL_SUBMIT_COST
 
         status = check_proposal_status(self, amount_to_be_checked)
-        self.draft = False
-        if status != self.FINE:
-            self.hide = True
-        self.payment_status = status
-        self.save()
+        if not (status == self.HORIZON_ERROR and self.status == self.HORIZON_ERROR):
+            if status != self.HORIZON_ERROR:
+                self.draft = False
+                if status != self.FINE:
+                    self.hide = True
+            self.payment_status = status
+            self.save()
 
     def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
         if not self.vote_against_issuer:
