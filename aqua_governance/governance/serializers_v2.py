@@ -19,6 +19,7 @@ class ProposalListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'vote_for_result', 'vote_against_result',
             'is_simple_proposal', 'aqua_circulating_supply', 'proposal_status', 'payment_status',
+            'discord_channel_url', 'discord_channel_name', 'discord_username',
         ]
 
 
@@ -39,17 +40,17 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
 
 class ProposalCreateSerializer(serializers.ModelSerializer):
     text = QuillField()
-    discord_username = serializers.CharField(required=False, allow_null=True, validators=[DiscordUsernameValidator(), ])
+    discord_username = serializers.CharField(required=True, allow_null=True, validators=[DiscordUsernameValidator(), ])
 
     class Meta:
         model = Proposal
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
-            'discord_channel_name', 'discord_username', 'envelope_xdr',
+            'discord_channel_name', 'discord_username', 'envelope_xdr', 'discord_channel_url',
             'proposal_status', 'payment_status', 'draft',
         ]
         read_only_fields = [
-            'proposal_status', 'payment_status', 'draft',
+            'proposal_status', 'payment_status', 'draft', 'start_at', 'end_at',
         ]
         extra_kwargs = {
             'envelope_xdr': {'required': True},
@@ -73,12 +74,12 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
         model = Proposal
         fields = [
             'id', 'version', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
-            'discord_channel_name', 'discord_username', 'envelope_xdr',
+            'discord_channel_url', 'discord_channel_name', 'discord_username', 'envelope_xdr',
             'proposal_status', 'payment_status',
         ]
         read_only_fields = [
             'id', 'proposed_by', 'start_at', 'end_at', 'version',
-            'discord_channel_name', 'discord_username',
+            'discord_channel_url', 'discord_channel_name', 'discord_username',
             'proposal_status', 'payment_status',
         ]
         extra_kwargs = {
@@ -112,12 +113,12 @@ class SubmitSerializer(serializers.ModelSerializer):
         model = Proposal
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
-            'discord_channel_name', 'discord_username', 'envelope_xdr',
+            'discord_channel_url', 'discord_channel_name', 'discord_username', 'envelope_xdr',
             'proposal_status', 'payment_status',
         ]
         read_only_fields = [
             'id', 'proposed_by', 'title', 'text',
-            'discord_channel_name', 'discord_username',
+            'discord_channel_url', 'discord_channel_name', 'discord_username',
             'proposal_status', 'payment_status',
         ]
         extra_kwargs = {
