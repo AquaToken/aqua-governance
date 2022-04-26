@@ -28,7 +28,7 @@ class HistoryProposalSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = HistoryProposal
-        fields = ['version', 'title', 'text']
+        fields = ['version', 'title', 'text', 'created_at']
 
 
 class ProposalListSerializer(serializers.ModelSerializer):
