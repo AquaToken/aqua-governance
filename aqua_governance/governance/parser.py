@@ -19,7 +19,7 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
     for claimant in claimants:
         if claimant['destination'] == sponsor:
             abs_before = claimant.get('predicate', None).get('not', None).get('abs_before', None)
-            if abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1):
+            if abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1) + 2 * (date_parse(last_modified_time) - proposal.start_at):
                 time_list.append(abs_before)
     if not time_list:
         return None
