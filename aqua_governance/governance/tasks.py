@@ -5,6 +5,7 @@ from typing import Optional
 
 import requests
 from django.conf import settings
+from django.utils import timezone
 
 from stellar_sdk import Asset, Server
 
@@ -81,7 +82,7 @@ def task_update_proposal_result(proposal_id):
 @celery_app.task(ignore_result=True)
 def task_update_proposal_status(proposal_id):
     proposal = Proposal.objects.get(id=proposal_id)
-    if proposal.end_at <= datetime.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
+    if proposal.end_at <= timezone.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
         proposal.proposal_status = Proposal.VOTED
         proposal.save()
         task_update_proposal_result.delay(proposal_id)
