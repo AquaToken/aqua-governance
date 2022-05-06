@@ -139,11 +139,11 @@ class HistoryProposal(models.Model):
     title = models.CharField(max_length=256)
     text = QuillField()
 
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField()
 
     transaction_hash = models.CharField(max_length=64, unique=True, null=True)
     envelope_xdr = models.TextField(null=True, blank=True)
     proposal = models.ForeignKey(Proposal, related_name='history_proposal', on_delete=models.CASCADE, null=True)
 
     def __str__(self):
-        return 'History proposal ' + self.id
+        return 'History proposal ' + str(self.id)
