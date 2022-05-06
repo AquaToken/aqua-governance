@@ -33,6 +33,3 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
         created_at=last_modified_time,
         transaction_link=transaction_link,
     )
-
-def parse_transaction_info():
-    pass
