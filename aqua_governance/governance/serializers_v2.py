@@ -95,6 +95,7 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
             transaction_hash=instance.transaction_hash,
             envelope_xdr=instance.envelope_xdr,
             proposal=instance,
+            created_at=instance.last_updated_at,
         )
         validated_data['draft'] = True
         validated_data['version'] = instance.version + 1
@@ -137,6 +138,7 @@ class SubmitSerializer(serializers.ModelSerializer):
             transaction_hash=instance.transaction_hash,
             envelope_xdr=instance.envelope_xdr,
             proposal=instance,
+            created_at=instance.last_updated_at,
         )
         validated_data['draft'] = True
         data_to_check = {'text': instance.text}
