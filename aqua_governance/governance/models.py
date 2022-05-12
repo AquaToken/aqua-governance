@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import requests
 from django.conf import settings
 from django.db import models
@@ -42,6 +44,18 @@ class Proposal(models.Model):
         (FINE, 'Fine'),
     )
 
+    NONE = 'NONE'
+    TO_UPDATE = 'TO_UPDATE'
+    TO_SUBMIT = 'TO_SUBMIT'
+    TO_CREATE = 'TO_CREATE'
+
+    PROPOSAL_ACTION_CHOICES = (
+        (TO_UPDATE, 'To update'),
+        (TO_SUBMIT, 'To submit'),
+        (TO_CREATE, 'To create'),
+        (NONE, 'None'),
+    )
+
     proposed_by = models.CharField(max_length=56)
     title = models.CharField(max_length=256)
     text = QuillField()
@@ -75,6 +89,15 @@ class Proposal(models.Model):
     discord_channel_name = models.CharField(max_length=64, blank=True, null=True)
     discord_username = models.CharField(max_length=64, blank=True, null=True)
 
+    new_title = models.CharField(max_length=256, null=True)
+    new_text = QuillField(null=True)
+    new_transaction_hash = models.CharField(max_length=64, unique=True, null=True)
+    new_envelope_xdr = models.TextField(null=True, blank=True)
+    new_start_at = models.DateTimeField(null=True, blank=True)
+    new_end_at = models.DateTimeField(null=True, blank=True)
+
+    action = models.CharField(choices=PROPOSAL_ACTION_CHOICES, max_length=64, default=NONE)
+
     voting_time_tracker = FieldTracker(fields=['end_at'])
 
     def __str__(self):
@@ -83,19 +106,61 @@ class Proposal(models.Model):
     def check_transaction(self):
         from aqua_governance.utils.payments import check_proposal_status
 
-        if self.proposal_status == self.DISCUSSION:
-            amount_to_be_checked = settings.PROPOSAL_CREATE_OR_UPDATE_COST
-        else:
-            amount_to_be_checked = settings.PROPOSAL_SUBMIT_COST
+        if self.action == self.TO_UPDATE:
+            status = check_proposal_status(self.new_transaction_hash, self.new_text.html, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
+            if status == self.FINE:
+                HistoryProposal.objects.create(
+                    version=self.version,
+                    title=self.title,
+                    text=self.text,
+                    transaction_hash=self.transaction_hash,
+                    envelope_xdr=self.envelope_xdr,
+                    proposal=self,
+                    created_at=self.last_updated_at,
+                )
+                self.payment_status = status
+                self.last_updated_at = datetime.now()
+                self.text = self.new_text
+                self.title = self.new_title
+                self.version = self.version + 1
+                self.transaction_hash = self.new_transaction_hash
+                self.envelope_xdr = self.new_envelope_xdr
+                self.action = self.NONE
+                self.save()
 
-        status = check_proposal_status(self, amount_to_be_checked)
-        if not (status == self.HORIZON_ERROR and self.status == self.HORIZON_ERROR):
-            if status != self.HORIZON_ERROR:
-                self.draft = False
-                if status != self.FINE:
-                    self.hide = True
-            self.payment_status = status
-            self.save()
+        elif self.action == self.TO_SUBMIT:
+            status = check_proposal_status(self.new_transaction_hash, self.new_text.html, settings.PROPOSAL_SUBMIT_COST)
+            if status == self.FINE:
+                HistoryProposal.objects.create(
+                    version=self.version,
+                    hide=True,
+                    title=self.title,
+                    text=self.text,
+                    transaction_hash=self.transaction_hash,
+                    envelope_xdr=self.envelope_xdr,
+                    proposal=self,
+                    created_at=self.last_updated_at,
+                )
+                self.payment_status = status
+                self.proposal_status = self.VOTING
+                self.last_updated_at = datetime.now()
+                self.start_at = self.new_start_at
+                self.end_at = self.new_end_at
+                self.transaction_hash = self.new_transaction_hash
+                self.envelope_xdr = self.new_envelope_xdr
+                self.action = self.NONE
+                self.save()
+
+        elif self.action == self.TO_CREATE:
+            status = check_proposal_status(self.transaction_hash, self.text.html, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
+            if not (status == self.HORIZON_ERROR and self.status == self.HORIZON_ERROR):
+                if status != self.HORIZON_ERROR:
+                    self.draft = False
+                    self.action = self.NONE
+                    if status != self.FINE:
+                        self.hide = True
+                self.payment_status = status
+                self.save()
 
     def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
         if not self.vote_against_issuer:

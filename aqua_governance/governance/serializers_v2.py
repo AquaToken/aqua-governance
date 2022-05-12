@@ -59,6 +59,7 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data['draft'] = True
+        validated_data['action'] = Proposal.TO_CREATE
         status = check_transaction_xdr(validated_data, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
         if status != Proposal.FINE:
             validated_data['hide'] = True
@@ -67,7 +68,8 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
 
 
 class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about joining with create serializer
-    text = QuillField()
+    text = QuillField(required=False)
+    new_text = QuillField()
     discord_username = serializers.CharField(required=False, allow_null=True, validators=[DiscordUsernameValidator(), ])
 
     class Meta:
@@ -76,33 +78,27 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
             'id', 'version', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'envelope_xdr',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'new_envelope_xdr', 'new_transaction_hash', 'new_title', 'new_text',
         ]
         read_only_fields = [
-            'id', 'proposed_by', 'start_at', 'end_at', 'version',
+            'id', 'proposed_by', 'start_at', 'end_at', 'version', 'title', 'text',
             'discord_channel_url', 'discord_channel_name', 'discord_username',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
         ]
         extra_kwargs = {
-            'envelope_xdr': {'required': True},
-            'transaction_hash': {'required': True},
+            'new_title': {'required': True},
+            'new_text': {'required': True},
+            'new_envelope_xdr': {'required': True},
+            'new_transaction_hash': {'required': True},
         }
 
     def update(self, instance, validated_data):
-        HistoryProposal.objects.create(
-            version=instance.version,
-            title=instance.title,
-            text=instance.text,
-            transaction_hash=instance.transaction_hash,
-            envelope_xdr=instance.envelope_xdr,
-            proposal=instance,
-            created_at=instance.last_updated_at,
-        )
-        validated_data['draft'] = True
-        validated_data['version'] = instance.version + 1
-        validated_data['last_updated_at'] = datetime.now()
-        status = check_transaction_xdr(validated_data, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
-        if status != Proposal.FINE:
-            validated_data['hide'] = True
+        validated_data['action'] = Proposal.TO_UPDATE
+        data_to_check = {
+            'text': validated_data['new_text'], 'envelope_xdr': validated_data['new_envelope_xdr'],
+        }
+
+        status = check_transaction_xdr(data_to_check, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
         validated_data['payment_status'] = status
         return super(ProposalUpdateSerializer, self).update(instance, validated_data)
 
@@ -113,9 +109,10 @@ class SubmitSerializer(serializers.ModelSerializer):
     class Meta:
         model = Proposal
         fields = [
-            'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
+            'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'envelope_xdr',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'new_start_at', 'new_end_at', 'new_envelope_xdr', 'new_transaction_hash',
         ]
         read_only_fields = [
             'id', 'proposed_by', 'title', 'text',
@@ -123,29 +120,15 @@ class SubmitSerializer(serializers.ModelSerializer):
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
         ]
         extra_kwargs = {
-            'start_at': {'required': True},
-            'end_at': {'required': True},
-            'envelope_xdr': {'required': True},
-            'transaction_hash': {'required': True},
+            'new_start_at': {'required': True},
+            'new_end_at': {'required': True},
+            'new_envelope_xdr': {'required': True},
+            'new_transaction_hash': {'required': True},
         }
 
     def update(self, instance, validated_data):
-        HistoryProposal.objects.create(
-            version=instance.version,
-            hide=True,
-            title=instance.title,
-            text=instance.text,
-            transaction_hash=instance.transaction_hash,
-            envelope_xdr=instance.envelope_xdr,
-            proposal=instance,
-            created_at=instance.last_updated_at,
-        )
-        validated_data['draft'] = True
-        data_to_check = {'text': instance.text}
-        data_to_check.update(validated_data)
+        validated_data['action'] = Proposal.TO_SUBMIT
+        data_to_check = {'text': instance.text, 'envelope_xdr': validated_data['new_envelope_xdr']}
         status = check_transaction_xdr(data_to_check, settings.PROPOSAL_SUBMIT_COST)
-        if status != Proposal.FINE:
-            validated_data['hide'] = True
-        validated_data['proposal_status'] = Proposal.VOTING
         validated_data['payment_status'] = status
         return super(SubmitSerializer, self).update(instance, validated_data)

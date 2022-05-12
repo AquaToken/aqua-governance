@@ -38,24 +38,23 @@ def check_xdr_payment(transaction_envelope, payment_amount=settings.PROPOSAL_COS
     return False
 
 
-def check_proposal_status(instance, payment_amount=settings.PROPOSAL_COST):
+def check_proposal_status(transaction_hash, text, payment_amount=settings.PROPOSAL_COST):
     horizon_server = Server(settings.HORIZON_URL)
     try:
-        transaction_info = horizon_server.transactions().transaction(instance.transaction_hash).call()
+        transaction_info = horizon_server.transactions().transaction(transaction_hash).call()
     except Exception:
         return Proposal.HORIZON_ERROR
 
-    proposal = Proposal.objects.get(transaction_hash=instance.transaction_hash)
     if not transaction_info.get('successful', None):
         return Proposal.FAILED_TRANSACTION
-    if not check_payment(instance.transaction_hash, payment_amount):
+    if not check_payment(transaction_hash, payment_amount):
         return Proposal.INVALID_PAYMENT
 
     memo = transaction_info.get('memo', None)
     if not memo:
         return Proposal.BAD_MEMO
 
-    text_hash = hashlib.sha256(proposal.text.html.encode('utf-8')).hexdigest()
+    text_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
 
     if not base64.b64encode(HashMemo(text_hash).memo_hash).decode() == memo:
         return Proposal.BAD_MEMO
