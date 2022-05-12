@@ -127,6 +127,9 @@ class Proposal(models.Model):
                 self.envelope_xdr = self.new_envelope_xdr
                 self.action = self.NONE
                 self.save()
+            else:
+                self.payment_status = status
+                self.save()
 
         elif self.action == self.TO_SUBMIT:
             status = check_proposal_status(self.new_transaction_hash, self.new_text.html, settings.PROPOSAL_SUBMIT_COST)
@@ -149,6 +152,9 @@ class Proposal(models.Model):
                 self.transaction_hash = self.new_transaction_hash
                 self.envelope_xdr = self.new_envelope_xdr
                 self.action = self.NONE
+                self.save()
+            else:
+                self.payment_status = status
                 self.save()
 
         elif self.action == self.TO_CREATE:
