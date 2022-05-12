@@ -132,7 +132,7 @@ class Proposal(models.Model):
                 self.save()
 
         elif self.action == self.TO_SUBMIT:
-            status = check_proposal_status(self.new_transaction_hash, self.new_text.html, settings.PROPOSAL_SUBMIT_COST)
+            status = check_proposal_status(self.new_transaction_hash, self.text.html, settings.PROPOSAL_SUBMIT_COST)
             if status == self.FINE:
                 HistoryProposal.objects.create(
                     version=self.version,
