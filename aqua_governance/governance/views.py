@@ -95,8 +95,10 @@ class ProposalViewSet(
                 proposal_status=Proposal.DISCUSSION, last_updated_at__lte=datetime.now() - settings.DISCUSSION_TIME,
             )
 
+        if self.action == 'update' or self.action == 'partial_update':
+            queryset = queryset.filter(proposal_status=Proposal.DISCUSSION)
         if self.action == 'check_proposal_payment':
-            return queryset.filter(draft=True)
+            return queryset.exclude(action=Proposal.NONE)
         return queryset.filter(draft=False)
 
     def get_serializer_class(self):
@@ -112,7 +114,7 @@ class ProposalViewSet(
         return super().get_serializer_class()
 
     def _check_owner_permissions(self, proposal, data):
-        envelope_xdr = data.get('envelope_xdr', None)
+        envelope_xdr = data.get('new_envelope_xdr', None)
         try:
             transaction_envelope = TransactionEnvelope.from_xdr(envelope_xdr, settings.NETWORK_PASSPHRASE)
         except Exception:
