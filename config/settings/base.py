@@ -215,8 +215,8 @@ AQUA_CIRCULATING_URL = 'https://cmc.aqua.network/api/coins/?q=circulating'
 
 PROPOSAL_COST = 1000000  # TODO: remove it
 
-PROPOSAL_SUBMIT_COST = 1   # TODO: change amount
-PROPOSAL_CREATE_OR_UPDATE_COST = 1  # TODO: change amount
+PROPOSAL_SUBMIT_COST = 900000
+PROPOSAL_CREATE_OR_UPDATE_COST = 100000
 
 EXPIRED_TIME = relativedelta(months=1)
 DISCUSSION_TIME = timedelta(days=7)
