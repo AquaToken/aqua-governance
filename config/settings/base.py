@@ -218,6 +218,6 @@ PROPOSAL_COST = 1000000  # TODO: remove it
 PROPOSAL_SUBMIT_COST = 900000
 PROPOSAL_CREATE_OR_UPDATE_COST = 100000
 
-EXPIRED_TIME = relativedelta(months=1)
+EXPIRED_TIME = timedelta(days=30)
 DISCUSSION_TIME = timedelta(days=7)
 NETWORK_PASSPHRASE = Network.public_network().network_passphrase
