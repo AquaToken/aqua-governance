@@ -22,7 +22,7 @@ logger = logging.getLogger()
 
 def _parse_claimable_balance(claimable_balance: dict, proposal: Proposal, log_vote: str) -> Optional[LogVote]:
     balance_id = claimable_balance['id']
-    if LogVote.objects.filter(claimable_balance_id=balance_id).exists():
+    if claimable_balance['asset'].split(':')[0] == settings.AQUA_ASSET_CODE and LogVote.objects.filter(claimable_balance_id=balance_id).exists():
         return
 
     try:
@@ -67,6 +67,18 @@ def task_update_proposal_result(proposal_id):
             ).order(desc=False),
             LogVote.VOTE_AGAINST,
         ),
+        (
+            horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
+                Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_ISSUER),
+            ).order(desc=False),
+            LogVote.VOTE_FOR,
+        ),
+        (
+            horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
+                Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_ISSUER),
+            ).order(desc=False),
+            LogVote.VOTE_AGAINST,
+        ),
     )
 
     for request_builder in request_builders:
@@ -75,6 +87,7 @@ def task_update_proposal_result(proposal_id):
             if claimable_balance:
                 new_log_vote_list.append(claimable_balance)
 
+    proposal.logvote_set.filter(asset_code=settings.GOVERNANCE_ICE_ASSET_CODE).delete()
     LogVote.objects.bulk_create(new_log_vote_list)
     _update_proposal_final_results(proposal_id)
 

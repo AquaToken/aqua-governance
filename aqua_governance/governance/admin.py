@@ -45,12 +45,14 @@ class ProposalAdmin(admin.ModelAdmin):
 
 @admin.register(LogVote)
 class LogVoteAdmin(admin.ModelAdmin):
-    list_display = ['account_issuer', 'amount', 'vote_choice', 'created_at']
+    list_display = ['asset_code', 'amount', 'vote_choice', 'created_at']
     readonly_fields = [
+        'asset_code',
         'claimable_balance_id', 'transaction_link', 'account_issuer', 'amount', 'proposal', 'vote_choice', 'created_at',
     ]
     search_fields = ['proposal__id', 'proposal__vote_for_issuer', 'proposal__vote_against_issuer']
     fields = [
+        'asset_code',
         'claimable_balance_id', 'transaction_link', 'account_issuer', 'amount', 'proposal', 'vote_choice', 'created_at',
     ]
     list_filter = ('vote_choice', )

@@ -8,6 +8,7 @@ from aqua_governance.governance.models import LogVote, Proposal
 def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice: str):
 
     balance_id = claimable_balance['id']
+    asset_code = claimable_balance['asset'].split(':')[0]
     amount = claimable_balance['amount']
     sponsor = claimable_balance['sponsor']
     last_modified_time = claimable_balance['last_modified_time']
@@ -32,4 +33,5 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
         account_issuer=sponsor,
         created_at=last_modified_time,
         transaction_link=transaction_link,
+        asset_code=asset_code,
     )
