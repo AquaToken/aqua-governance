@@ -191,6 +191,11 @@ class LogVote(models.Model):
         (VOTE_FOR, 'Vote For'),
         (VOTE_AGAINST, 'Vote Against'),
     )
+    ASSET_TYPES = (
+        (settings.AQUA_ASSET_CODE, settings.AQUA_ASSET_CODE),
+        (settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_CODE),
+    )
+
     claimable_balance_id = models.CharField(max_length=72, unique=True, null=True)
     transaction_link = models.URLField(null=True)
     account_issuer = models.CharField(max_length=56, null=True)
@@ -198,6 +203,7 @@ class LogVote(models.Model):
     proposal = models.ForeignKey(Proposal, on_delete=models.CASCADE, null=True)
     vote_choice = models.CharField(max_length=15, choices=VOTE_TYPES, default=None, null=True)
     created_at = models.DateTimeField(default=None, null=True)
+    asset_code = models.CharField(max_length=15, choices=ASSET_TYPES, default=settings.AQUA_ASSET_CODE)
 
     def __str__(self):
         return str(self.id)
