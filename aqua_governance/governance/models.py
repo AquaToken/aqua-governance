@@ -203,7 +203,7 @@ class LogVote(models.Model):
     proposal = models.ForeignKey(Proposal, on_delete=models.CASCADE, null=True)
     vote_choice = models.CharField(max_length=15, choices=VOTE_TYPES, default=None, null=True)
     created_at = models.DateTimeField(default=None, null=True)
-    asset_code = models.CharField(max_length=12, choices=ASSET_TYPES, default=settings.AQUA_ASSET_CODE)
+    asset_code = models.CharField(max_length=15, choices=ASSET_TYPES, default=settings.AQUA_ASSET_CODE)
 
     def __str__(self):
         return str(self.id)
