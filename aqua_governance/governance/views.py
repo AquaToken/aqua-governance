@@ -74,7 +74,7 @@ class ProposalViewSet(
     RetrieveModelMixin,
     GenericViewSet,
 ):
-    queryset = Proposal.objects.filter(hide=False)
+    queryset = Proposal.objects.filter(hide=False).exclude(id=65)
     permission_classes = (AllowAny, )
     serializer_class = serializers_v2.ProposalDetailSerializer
     pagination_class = CustomPageNumberPagination
@@ -146,3 +146,7 @@ class ProposalViewSet(
         proposal = self.get_object()
         proposal.check_transaction()
         return Response(data=self.get_serializer(instance=proposal).data)
+
+
+class TestProposalViewSet(ProposalViewSet):
+    queryset = Proposal.objects.filter(hide=False)
