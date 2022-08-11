@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from dateutil.parser import parse as date_parse
+from django.conf import settings
 
 from aqua_governance.governance.models import LogVote, Proposal
 
@@ -19,7 +20,10 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
     time_list = []
     for claimant in claimants:
         abs_before = claimant.get('predicate', None).get('not', None).get('abs_before', None)
-        if abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1) + 2 * (date_parse(last_modified_time) - timedelta(minutes=15) - proposal.start_at):
+        if claimant['destination'] == sponsor:
+            if abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1) + 2 * (date_parse(last_modified_time) - timedelta(minutes=15) - proposal.start_at):
+                time_list.append(abs_before)
+        elif sponsor == settings.GOVERNANCE_ICE_ASSET_ISSUER and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1):
             time_list.append(abs_before)
     if not time_list:
         return None
