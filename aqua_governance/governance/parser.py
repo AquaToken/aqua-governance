@@ -23,7 +23,7 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
         if claimant['destination'] == sponsor:
             if abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1) + 2 * (date_parse(last_modified_time) - timedelta(minutes=15) - proposal.start_at):
                 time_list.append(abs_before)
-        elif sponsor == settings.GOVERNANCE_ICE_ASSET_ISSUER and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1):
+        elif abs_before and sponsor == settings.GOVERNANCE_ICE_ASSET_ISSUER and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1):
             time_list.append(abs_before)
     if not time_list:
         return None
