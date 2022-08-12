@@ -43,3 +43,19 @@ class ProposalOwnerFilterBackend(BaseFilterBackend):
             return queryset.filter(proposed_by=public_key)
 
         return queryset
+
+
+class LogVoteOwnerFilterBackend(BaseFilterBackend):
+    def filter_queryset(self, request, queryset, view):
+        public_key = request.query_params.get('owner_public_key')
+        if public_key:
+            return queryset.filter(account_issuer=public_key)
+        return queryset
+
+
+class LogVoteProposalIdFilterBackend(BaseFilterBackend):
+    def filter_queryset(self, request, queryset, view):
+        proposal_id = request.query_params.get('proposal_id', None)
+        if proposal_id:
+            return queryset.filter(proposal=proposal_id)
+        return queryset
