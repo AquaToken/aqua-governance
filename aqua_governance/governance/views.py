@@ -15,7 +15,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.viewsets import GenericViewSet
 from stellar_sdk import TransactionEnvelope
 
-from aqua_governance.governance.filters import ProposalStatusFilterBackend, ProposalOwnerFilterBackend
+from aqua_governance.governance.filters import ProposalStatusFilterBackend,ProposalOwnerFilterBackend, \
+    LogVoteOwnerFilterBackend,LogVoteProposalIdFilterBackend
 from aqua_governance.governance.models import LogVote, Proposal, HistoryProposal
 from aqua_governance.governance.pagination import CustomPageNumberPagination
 from aqua_governance.governance.serializers import (
@@ -54,17 +55,11 @@ class LogVoteView(ListModelMixin, GenericViewSet):
     pagination_class = CustomPageNumberPagination
     filter_backends = (
         OrderingFilter,
+        LogVoteOwnerFilterBackend,
+        LogVoteProposalIdFilterBackend,
     )
     ordering = ['-created_at']
     ordering_fields = ['created_at', 'amount', 'vote_choice', 'account_issuer']
-
-    def get_queryset(self):
-        proposal_id = self.request.query_params.get('proposal_id', None)
-        if not proposal_id:
-            raise Http404
-        queryset = super(LogVoteView, self).get_queryset()
-
-        return queryset.filter(proposal=proposal_id)
 
 
 class ProposalViewSet(
