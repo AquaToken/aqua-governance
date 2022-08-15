@@ -84,6 +84,8 @@ class Proposal(models.Model):
     envelope_xdr = models.TextField(null=True, blank=True)
 
     aqua_circulating_supply = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True)
+    ice_circulating_supply = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True)
+    percent_for_quorum = models.PositiveSmallIntegerField(default=10)
 
     discord_channel_url = models.URLField(blank=True, null=True)
     discord_channel_name = models.CharField(max_length=64, blank=True, null=True)
@@ -180,6 +182,9 @@ class Proposal(models.Model):
             response = requests.get(settings.AQUA_CIRCULATING_URL)
             if response.status_code == 200:
                 self.aqua_circulating_supply = response.json()
+            response = requests.get(settings.ICE_CIRCULATING_URL)
+            if response.status_code == 200:
+                self.ice_circulating_supply = float(response.json()['ice_supply_amount'])
 
         super(Proposal, self).save(force_insert, force_update, using, update_fields)
 
