@@ -85,7 +85,7 @@ class Proposal(models.Model):
 
     aqua_circulating_supply = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True)
     ice_circulating_supply = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True)
-    percent_for_quorum = models.PositiveSmallIntegerField(default=10)
+    percent_for_quorum = models.PositiveSmallIntegerField(blank=True, default=10)
 
     discord_channel_url = models.URLField(blank=True, null=True)
     discord_channel_name = models.CharField(max_length=64, blank=True, null=True)
