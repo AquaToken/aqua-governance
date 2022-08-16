@@ -1,6 +1,7 @@
+from django.db.models import Prefetch
 from rest_framework.filters import BaseFilterBackend
 
-from aqua_governance.governance.models import Proposal
+from aqua_governance.governance.models import Proposal,LogVote
 
 
 class HideFilterBackend(BaseFilterBackend):  # TODO: remove it
@@ -43,6 +44,18 @@ class ProposalOwnerFilterBackend(BaseFilterBackend):
             return queryset.filter(proposed_by=public_key)
 
         return queryset
+
+
+class ProposalVoteOwnerFilterBackend(BaseFilterBackend):
+    def filter_queryset(self, request, queryset, view):
+        public_key = request.query_params.get('vote_owner_public_key')
+        if public_key:
+            return queryset.filter(logvote__account_issuer=public_key).distinct().prefetch_related(
+                Prefetch('logvote_set', LogVote.objects.filter(account_issuer=public_key).order_by('-created_at')),
+            )
+        return queryset.prefetch_related(
+            Prefetch('logvote_set', LogVote.objects.all().order_by('-created_at')),
+        )
 
 
 class LogVoteOwnerFilterBackend(BaseFilterBackend):

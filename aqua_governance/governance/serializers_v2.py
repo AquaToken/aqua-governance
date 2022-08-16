@@ -6,13 +6,14 @@ from rest_framework import serializers
 
 from aqua_governance.governance.models import Proposal, HistoryProposal
 from aqua_governance.governance.serializer_fields import QuillField
-from aqua_governance.governance.serializers import HistoryProposalSerializer
+from aqua_governance.governance.serializers import HistoryProposalSerializer,LogVoteSerializer
 from aqua_governance.governance.validators import DiscordUsernameValidator
 from aqua_governance.utils.payments import check_transaction_xdr
 
 
 class ProposalListSerializer(serializers.ModelSerializer):
     text = QuillField()
+    logvote_set = LogVoteSerializer(many=True)
 
     class Meta:
         model = Proposal
@@ -20,6 +21,7 @@ class ProposalListSerializer(serializers.ModelSerializer):
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'vote_for_result', 'vote_against_result',
             'is_simple_proposal', 'aqua_circulating_supply', 'proposal_status', 'payment_status',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'last_updated_at', 'created_at',
+            'logvote_set',
         ]
 
 
