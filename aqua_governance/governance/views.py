@@ -16,7 +16,7 @@ from rest_framework.viewsets import GenericViewSet
 from stellar_sdk import TransactionEnvelope
 
 from aqua_governance.governance.filters import ProposalStatusFilterBackend,ProposalOwnerFilterBackend, \
-    LogVoteOwnerFilterBackend,LogVoteProposalIdFilterBackend
+    LogVoteOwnerFilterBackend,LogVoteProposalIdFilterBackend,ProposalVoteOwnerFilterBackend
 from aqua_governance.governance.models import LogVote, Proposal, HistoryProposal
 from aqua_governance.governance.pagination import CustomPageNumberPagination
 from aqua_governance.governance.serializers import (
@@ -77,6 +77,7 @@ class ProposalViewSet(
         OrderingFilter,
         ProposalStatusFilterBackend,
         ProposalOwnerFilterBackend,
+        ProposalVoteOwnerFilterBackend,
     )
     ordering = ['created_at']
 
