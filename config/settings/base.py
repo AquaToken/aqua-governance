@@ -215,6 +215,8 @@ AQUA_CIRCULATING_URL = 'https://cmc.aqua.network/api/coins/?q=circulating'
 
 GOVERNANCE_ICE_ASSET_CODE = 'governICE'
 GOVERNANCE_ICE_ASSET_ISSUER = 'GAXSGZ2JM3LNWOO4WRGADISNMWO4HQLG4QBGUZRKH5ZHL3EQBGX73ICE'
+ICE_CIRCULATING_URL = 'https://ice-distributor.aqua.network/api/distributions/stats/'
+
 
 PROPOSAL_COST = 1000000  # TODO: remove it
 

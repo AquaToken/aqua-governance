@@ -21,7 +21,7 @@ class ProposalListSerializer(serializers.ModelSerializer):
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'vote_for_result', 'vote_against_result',
             'is_simple_proposal', 'aqua_circulating_supply', 'proposal_status', 'payment_status',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'last_updated_at', 'created_at',
-            'logvote_set',
+            'logvote_set', 'percent_for_quorum', 'ice_circulating_supply',
         ]
 
 
@@ -36,7 +36,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
             'proposal_status', 'payment_status', 'last_updated_at',
             'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',
             'aqua_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
-            'history_proposal', 'created_at',
+            'history_proposal', 'created_at', 'percent_for_quorum', 'ice_circulating_supply',
         ]
 
 

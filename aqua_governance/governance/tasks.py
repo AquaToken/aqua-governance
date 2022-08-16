@@ -44,8 +44,12 @@ def _update_proposal_final_results(proposal_id):
     if response.status_code == 200:
         proposal.aqua_circulating_supply = response.json()
 
+    response = requests.get(settings.ICE_CIRCULATING_URL)
+    if response.status_code == 200:
+        proposal.ice_circulating_supply = float(response.json()['ice_supply_amount'])
+
     with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-        proposal.save(update_fields=['vote_for_result', 'vote_against_result', 'aqua_circulating_supply'])
+        proposal.save(update_fields=['vote_for_result', 'vote_against_result', 'aqua_circulating_supply', 'ice_circulating_supply'])
 
 
 @celery_app.task(ignore_result=True)
