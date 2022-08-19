@@ -48,7 +48,7 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, Generi
 
 
 class LogVoteView(ListModelMixin, GenericViewSet):
-    queryset = LogVote.objects.all()
+    queryset = LogVote.objects.filter(hide=False)
     permission_classes = (AllowAny, )
     serializer_class = LogVoteSerializer
     pagination_class = CustomPageNumberPagination

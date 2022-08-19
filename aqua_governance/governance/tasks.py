@@ -33,9 +33,9 @@ def _parse_claimable_balance(claimable_balance: dict, proposal: Proposal, log_vo
 
 def _update_proposal_final_results(proposal_id):
     proposal = Proposal.objects.get(id=proposal_id)
-    vote_for_result = sum(proposal.logvote_set.filter(vote_choice=LogVote.VOTE_FOR).values_list('amount', flat=True))
+    vote_for_result = sum(proposal.logvote_set.filter(vote_choice=LogVote.VOTE_FOR, hide=False).values_list('amount', flat=True))
     vote_against_result = sum(
-        proposal.logvote_set.filter(vote_choice=LogVote.VOTE_AGAINST).values_list('amount', flat=True),
+        proposal.logvote_set.filter(vote_choice=LogVote.VOTE_AGAINST, hide=False).values_list('amount', flat=True),
     )
     proposal.vote_for_result = vote_for_result
     proposal.vote_against_result = vote_against_result
@@ -91,7 +91,7 @@ def task_update_proposal_result(proposal_id):
             if claimable_balance:
                 new_log_vote_list.append(claimable_balance)
 
-    proposal.logvote_set.filter(asset_code=settings.GOVERNANCE_ICE_ASSET_CODE).delete()
+    proposal.logvote_set.filter(asset_code=settings.GOVERNANCE_ICE_ASSET_CODE, hide=False).delete()
     LogVote.objects.bulk_create(new_log_vote_list)
     _update_proposal_final_results(proposal_id)
 
@@ -119,3 +119,35 @@ def task_check_expired_proposals():
     expired_period = datetime.now() - settings.EXPIRED_TIME
     proposals = Proposal.objects.filter(proposal_status=Proposal.DISCUSSION, last_updated_at__lte=expired_period)
     proposals.update(proposal_status=Proposal.EXPIRED, hide=True)
+
+
+@celery_app.task(ignore_result=True)
+def task_update_hidden_ice_votes_in_voted_proposals():
+    voted_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTED)
+    horizon_server = Server(settings.HORIZON_URL)
+
+    for proposal in voted_proposals:
+        new_hidden_log_vote_list = []
+        request_builders = (
+            (
+                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
+                    Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_ISSUER),
+                ).order(desc=False),
+                LogVote.VOTE_FOR,
+            ),
+            (
+                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
+                    Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_ISSUER),
+                ).order(desc=False),
+                LogVote.VOTE_AGAINST,
+            ),
+        )
+        for request_builder in request_builders:
+            for balance in load_all_records(request_builder[0]):
+                try:
+                    claimable_balance = parse_balance_info(balance, proposal, request_builder[1])
+                    new_hidden_log_vote_list.append(claimable_balance)
+                except ClaimableBalanceParsingError:
+                    logger.warning('Balance info skipped.', exc_info=sys.exc_info())
+            proposal.logvote_set.filter(asset_code=settings.GOVERNANCE_ICE_ASSET_CODE, hide=True).delete()
+            LogVote.objects.bulk_create(new_hidden_log_vote_list)
