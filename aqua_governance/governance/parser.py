@@ -6,7 +6,7 @@ from django.conf import settings
 from aqua_governance.governance.models import LogVote, Proposal
 
 
-def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice: str):
+def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice: str, hide=False):
 
     balance_id = claimable_balance['id']
     asset_code = claimable_balance['asset'].split(':')[0]
@@ -37,4 +37,5 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
         created_at=last_modified_time,
         transaction_link=transaction_link,
         asset_code=asset_code,
+        hide=hide,
     )
