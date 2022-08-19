@@ -24,6 +24,11 @@ def setup_periodic_tasks(sender, **kwargs):
             'schedule': crontab(minute='*/5'),
             'args': (),
         },
+        'aqua_governance.governance.tasks.task_update_hidden_ice_votes_in_voted_proposals': {
+            'task': 'aqua_governance.governance.tasks.task_update_hidden_ice_votes_in_voted_proposals',
+            'schedule': crontab(minute='*/5'),
+            'args': (),
+        },
         'aqua_governance.governance.tasks.task_check_expired_proposals': {
             'task': 'aqua_governance.governance.tasks.task_check_expired_proposals',
             'schedule': crontab(minute='0', hour='*/24'),

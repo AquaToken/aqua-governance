@@ -201,7 +201,7 @@ class LogVote(models.Model):
         (settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_CODE),
     )
 
-    claimable_balance_id = models.CharField(max_length=72, unique=True, null=True)
+    claimable_balance_id = models.CharField(max_length=72, null=True)
     transaction_link = models.URLField(null=True)
     account_issuer = models.CharField(max_length=56, null=True)
     amount = models.DecimalField(decimal_places=7, max_digits=20, blank=True, null=True)
@@ -209,6 +209,10 @@ class LogVote(models.Model):
     vote_choice = models.CharField(max_length=15, choices=VOTE_TYPES, default=None, null=True)
     created_at = models.DateTimeField(default=None, null=True)
     asset_code = models.CharField(max_length=15, choices=ASSET_TYPES, default=settings.AQUA_ASSET_CODE)
+    hide = models.BooleanField(default=False)
+
+    class Meta:
+        unique_together = [['hide', 'claimable_balance_id']]
 
     def __str__(self):
         return str(self.id)
