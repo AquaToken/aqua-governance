@@ -145,7 +145,7 @@ def task_update_hidden_ice_votes_in_voted_proposals():
         for request_builder in request_builders:
             for balance in load_all_records(request_builder[0]):
                 try:
-                    claimable_balance = parse_balance_info(balance, proposal, request_builder[1])
+                    claimable_balance = parse_balance_info(balance, proposal, request_builder[1], hide=True)
                     new_hidden_log_vote_list.append(claimable_balance)
                 except ClaimableBalanceParsingError:
                     logger.warning('Balance info skipped.', exc_info=sys.exc_info())
