@@ -149,5 +149,5 @@ def task_update_hidden_ice_votes_in_voted_proposals():
                     new_hidden_log_vote_list.append(claimable_balance)
                 except ClaimableBalanceParsingError:
                     logger.warning('Balance info skipped.', exc_info=sys.exc_info())
-            proposal.logvote_set.filter(asset_code=settings.GOVERNANCE_ICE_ASSET_CODE, hide=True).delete()
-            LogVote.objects.bulk_create(new_hidden_log_vote_list)
+        proposal.logvote_set.filter(asset_code=settings.GOVERNANCE_ICE_ASSET_CODE, hide=True).delete()
+        LogVote.objects.bulk_create(new_hidden_log_vote_list)
