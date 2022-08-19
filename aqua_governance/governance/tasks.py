@@ -131,13 +131,25 @@ def task_update_hidden_ice_votes_in_voted_proposals():
         request_builders = (
             (
                 horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
-                    Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_ISSUER),
+                    Asset(settings.AQUA_ASSET_CODE,settings.AQUA_ASSET_ISSUER),
                 ).order(desc=False),
                 LogVote.VOTE_FOR,
             ),
             (
                 horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
-                    Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_ISSUER),
+                    Asset(settings.AQUA_ASSET_CODE,settings.AQUA_ASSET_ISSUER),
+                ).order(desc=False),
+                LogVote.VOTE_AGAINST,
+            ),
+            (
+                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
+                    Asset(settings.GOVERNANCE_ICE_ASSET_CODE,settings.GOVERNANCE_ICE_ASSET_ISSUER),
+                ).order(desc=False),
+                LogVote.VOTE_FOR,
+            ),
+            (
+                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
+                    Asset(settings.GOVERNANCE_ICE_ASSET_CODE,settings.GOVERNANCE_ICE_ASSET_ISSUER),
                 ).order(desc=False),
                 LogVote.VOTE_AGAINST,
             ),
@@ -150,5 +162,5 @@ def task_update_hidden_ice_votes_in_voted_proposals():
                         new_hidden_log_vote_list.append(claimable_balance)
                 except ClaimableBalanceParsingError:
                     logger.warning('Balance info skipped.', exc_info=sys.exc_info())
-        proposal.logvote_set.filter(asset_code=settings.GOVERNANCE_ICE_ASSET_CODE, hide=True).delete()
+        proposal.logvote_set.filter(hide=True).delete()
         LogVote.objects.bulk_create(new_hidden_log_vote_list)
