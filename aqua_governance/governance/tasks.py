@@ -164,3 +164,10 @@ def task_update_hidden_ice_votes_in_voted_proposals():
                     logger.warning('Balance info skipped.', exc_info=sys.exc_info())
         proposal.logvote_set.filter(hide=True).delete()
         LogVote.objects.bulk_create(new_hidden_log_vote_list)
+
+
+@celery_app.task(ignore_result=True)
+def check_proposals_with_bad_horizon_error():
+    failed_proposals = Proposal.objects.filter(hide=False, payment_status=Proposal.HORIZON_ERROR)
+    for proposal in failed_proposals:
+        proposal.check_transaction()
