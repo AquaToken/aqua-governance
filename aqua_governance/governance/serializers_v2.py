@@ -53,6 +53,7 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'proposal_status', 'payment_status', 'draft', 'start_at', 'end_at', 'last_updated_at', 'created_at',
+            'discord_channel_name', 'discord_channel_url',
         ]
         extra_kwargs = {
             'envelope_xdr': {'required': True},

@@ -226,3 +226,8 @@ PROPOSAL_CREATE_OR_UPDATE_COST = 100000
 EXPIRED_TIME = timedelta(days=30)
 DISCUSSION_TIME = timedelta(days=7)
 NETWORK_PASSPHRASE = Network.public_network().network_passphrase
+
+# Discord info
+# --------------------------------------------------------------------------
+
+DEFAULT_DISCORD_URL = 'https://discord.com/channels/862710317825392660/1046931670458187836'
