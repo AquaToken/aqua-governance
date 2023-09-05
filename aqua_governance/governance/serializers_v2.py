@@ -7,7 +7,6 @@ from rest_framework import serializers
 from aqua_governance.governance.models import Proposal, HistoryProposal
 from aqua_governance.governance.serializer_fields import QuillField
 from aqua_governance.governance.serializers import HistoryProposalSerializer,LogVoteSerializer
-from aqua_governance.governance.validators import DiscordUsernameValidator
 from aqua_governance.utils.payments import check_transaction_xdr
 
 
@@ -42,7 +41,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
 
 class ProposalCreateSerializer(serializers.ModelSerializer):
     text = QuillField()
-    discord_username = serializers.CharField(required=True, allow_null=True, validators=[DiscordUsernameValidator(), ])
+    discord_username = serializers.CharField(required=True, allow_null=True)
 
     class Meta:
         model = Proposal
@@ -73,7 +72,7 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
 class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about joining with create serializer
     text = QuillField(required=False)
     new_text = QuillField()
-    discord_username = serializers.CharField(required=False, allow_null=True, validators=[DiscordUsernameValidator(), ])
+    discord_username = serializers.CharField(required=False, allow_null=True)
 
     class Meta:
         model = Proposal

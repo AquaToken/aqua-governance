@@ -12,7 +12,6 @@ from stellar_sdk import HashMemo, Server, TransactionEnvelope
 
 from aqua_governance.governance.models import LogVote, Proposal, HistoryProposal
 from aqua_governance.governance.serializer_fields import QuillField
-from aqua_governance.governance.validators import DiscordUsernameValidator
 from aqua_governance.utils.payments import check_payment, check_xdr_payment, check_proposal_status
 
 
@@ -59,7 +58,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
 
 class ProposalCreateSerializer(serializers.ModelSerializer):
     text = QuillField()
-    discord_username = serializers.CharField(required=False, allow_null=True, validators=[DiscordUsernameValidator(), ])
+    discord_username = serializers.CharField(required=False, allow_null=True)
 
     class Meta:
         model = Proposal
