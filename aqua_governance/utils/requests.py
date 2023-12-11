@@ -14,5 +14,9 @@ def load_all_records(request_builder, start_cursor=None, page_size=200):
             yield record
             cursor = record['paging_token']
 
-        if len(records) < page_size:
+        if len(records) == 0:
             break
+
+        # TODO: Roll back after the patch is released. https://github.com/stellar/go/pull/5032
+        # if len(records) < page_size:
+        #     break
