@@ -71,14 +71,6 @@ def task_update_proposal_result(proposal_id):
             horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
             LogVote.VOTE_AGAINST,
         ),
-        (
-            horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
-            LogVote.VOTE_FOR,
-        ),
-        (
-            horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
-            LogVote.VOTE_AGAINST,
-        ),
     )
 
     for request_builder in request_builders:
@@ -126,14 +118,6 @@ def task_update_hidden_ice_votes_in_voted_proposals():
         new_hidden_log_vote_list = []
         # TODO: Rollback asset filter after closing issue. https://github.com/stellar/go/issues/5199
         request_builders = (
-            (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
-                LogVote.VOTE_FOR,
-            ),
-            (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
-                LogVote.VOTE_AGAINST,
-            ),
             (
                 horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
                 LogVote.VOTE_FOR,
