@@ -2,13 +2,18 @@ from datetime import timedelta
 
 from dateutil.parser import parse as date_parse
 from django.conf import settings
+from stellar_sdk import Asset
 
 from aqua_governance.governance.models import LogVote, Proposal
+from aqua_governance.utils.stellar.asset import parse_asset_string
 
 
 def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice: str, hide=False):
+    AQUA_ASSET = Asset(settings.AQUA_ASSET_CODE, settings.AQUA_ASSET_ISSUER)
+    ICE_ASSET = Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_ISSUER)
 
     balance_id = claimable_balance['id']
+    asset = parse_asset_string(claimable_balance['asset'])
     asset_code = claimable_balance['asset'].split(':')[0]
     amount = claimable_balance['amount']
     sponsor = claimable_balance['sponsor']
@@ -17,12 +22,15 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
 
     claimants = claimable_balance['claimants']
 
+    if asset not in [AQUA_ASSET, ICE_ASSET]:
+        return None
+
     time_list = []
     for claimant in claimants:
         abs_before = claimant.get('predicate', None).get('not', None).get('abs_before', None)
-        if asset_code == settings.AQUA_ASSET_CODE and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1) + 2 * (date_parse(last_modified_time) - timedelta(minutes=15) - proposal.start_at):
+        if asset == AQUA_ASSET and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1) + 2 * (date_parse(last_modified_time) - timedelta(minutes=15) - proposal.start_at):
             time_list.append(abs_before)
-        elif asset_code == settings.GOVERNANCE_ICE_ASSET_CODE and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1):
+        elif asset == ICE_ASSET and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1):
             sponsor = claimant['destination']
             time_list.append(abs_before)
     if not time_list:

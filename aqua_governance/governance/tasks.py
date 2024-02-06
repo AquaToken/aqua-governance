@@ -15,14 +15,17 @@ from aqua_governance.governance.parser import parse_balance_info
 from aqua_governance.taskapp import app as celery_app
 from aqua_governance.utils.requests import load_all_records
 from aqua_governance.utils.signals import DisableSignals
-
+from aqua_governance.utils.stellar.asset import parse_asset_string
 
 logger = logging.getLogger()
 
 
 def _parse_claimable_balance(claimable_balance: dict, proposal: Proposal, log_vote: str) -> Optional[LogVote]:
+    AQUA_ASSET = Asset(settings.AQUA_ASSET_CODE, settings.AQUA_ASSET_ISSUER)
+
     balance_id = claimable_balance['id']
-    if claimable_balance['asset'].split(':')[0] == settings.AQUA_ASSET_CODE and LogVote.objects.filter(claimable_balance_id=balance_id).exists():
+    asset = parse_asset_string(claimable_balance['asset'])
+    if asset == AQUA_ASSET and LogVote.objects.filter(claimable_balance_id=balance_id).exists():
         return
 
     try:
@@ -58,29 +61,22 @@ def task_update_proposal_result(proposal_id):
     proposal = Proposal.objects.get(id=proposal_id)
     new_log_vote_list = []
 
+    # TODO: Rollback asset filter after closing issue. https://github.com/stellar/go/issues/5199
     request_builders = (
         (
-            horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
-                Asset(settings.AQUA_ASSET_CODE, settings.AQUA_ASSET_ISSUER),
-            ).order(desc=False),
+            horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
             LogVote.VOTE_FOR,
         ),
         (
-            horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
-                Asset(settings.AQUA_ASSET_CODE, settings.AQUA_ASSET_ISSUER),
-            ).order(desc=False),
+            horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
             LogVote.VOTE_AGAINST,
         ),
         (
-            horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
-                Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_ISSUER),
-            ).order(desc=False),
+            horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
             LogVote.VOTE_FOR,
         ),
         (
-            horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
-                Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_ISSUER),
-            ).order(desc=False),
+            horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
             LogVote.VOTE_AGAINST,
         ),
     )
@@ -128,29 +124,22 @@ def task_update_hidden_ice_votes_in_voted_proposals():
 
     for proposal in voted_proposals:
         new_hidden_log_vote_list = []
+        # TODO: Rollback asset filter after closing issue. https://github.com/stellar/go/issues/5199
         request_builders = (
             (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
-                    Asset(settings.AQUA_ASSET_CODE,settings.AQUA_ASSET_ISSUER),
-                ).order(desc=False),
+                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
                 LogVote.VOTE_FOR,
             ),
             (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
-                    Asset(settings.AQUA_ASSET_CODE,settings.AQUA_ASSET_ISSUER),
-                ).order(desc=False),
+                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
                 LogVote.VOTE_AGAINST,
             ),
             (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).for_asset(
-                    Asset(settings.GOVERNANCE_ICE_ASSET_CODE,settings.GOVERNANCE_ICE_ASSET_ISSUER),
-                ).order(desc=False),
+                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
                 LogVote.VOTE_FOR,
             ),
             (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).for_asset(
-                    Asset(settings.GOVERNANCE_ICE_ASSET_CODE,settings.GOVERNANCE_ICE_ASSET_ISSUER),
-                ).order(desc=False),
+                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
                 LogVote.VOTE_AGAINST,
             ),
         )
