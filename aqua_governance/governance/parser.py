@@ -25,6 +25,9 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
     if asset not in [AQUA_ASSET, ICE_ASSET]:
         return None
 
+    if last_modified_time is None:
+        last_modified_time = proposal.created_at
+
     time_list = []
     for claimant in claimants:
         abs_before = claimant.get('predicate', None).get('not', None).get('abs_before', None)
