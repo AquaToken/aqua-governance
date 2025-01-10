@@ -26,7 +26,7 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
         return None
 
     if last_modified_time is None:
-        last_modified_time = proposal.created_at
+        last_modified_time = str(proposal.created_at)
 
     time_list = []
     for claimant in claimants:
