@@ -199,6 +199,7 @@ class LogVote(models.Model):
     ASSET_TYPES = (
         (settings.AQUA_ASSET_CODE, settings.AQUA_ASSET_CODE),
         (settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_ASSET_CODE),
+        (settings.GDICE_ASSET_CODE, settings.GDICE_ASSET_CODE),
     )
 
     claimable_balance_id = models.CharField(max_length=72, null=True)

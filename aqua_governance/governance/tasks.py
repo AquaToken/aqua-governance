@@ -80,6 +80,7 @@ def task_update_proposal_result(proposal_id):
                 new_log_vote_list.append(claimable_balance)
 
     proposal.logvote_set.filter(asset_code=settings.GOVERNANCE_ICE_ASSET_CODE, hide=False).delete()
+    proposal.logvote_set.filter(asset_code=settings.GDICE_ASSET_CODE, hide=False).delete()
     LogVote.objects.bulk_create(new_log_vote_list)
     _update_proposal_final_results(proposal_id)
 
