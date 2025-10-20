@@ -85,7 +85,7 @@ class ProposalViewSet(
         queryset = super(ProposalViewSet, self).get_queryset().prefetch_related(
             Prefetch('history_proposal', HistoryProposal.objects.filter(hide=False))
         )
-        if self.action != 'retrieve':
+        if self.action != 'retrieve' and self.action != 'list':
             queryset = queryset.exclude(proposal_status=Proposal.EXPIRED)
 
         if self.action == 'submit_proposal':
