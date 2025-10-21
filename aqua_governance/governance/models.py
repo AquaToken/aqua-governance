@@ -109,7 +109,8 @@ class Proposal(models.Model):
         from aqua_governance.utils.payments import check_proposal_status
 
         if self.action == self.TO_UPDATE:
-            status = check_proposal_status(self.new_transaction_hash, self.new_text.html, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
+            status = check_proposal_status(self.new_transaction_hash, self.new_text.html,
+                                           settings.PROPOSAL_CREATE_OR_UPDATE_COST)
             if status == self.FINE:
                 HistoryProposal.objects.create(
                     version=self.version,
@@ -160,7 +161,8 @@ class Proposal(models.Model):
                 self.save()
 
         elif self.action == self.TO_CREATE:
-            status = check_proposal_status(self.transaction_hash, self.text.html, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
+            status = check_proposal_status(self.transaction_hash, self.text.html,
+                                           settings.PROPOSAL_CREATE_OR_UPDATE_COST)
             if not (status == self.HORIZON_ERROR and self.status == self.HORIZON_ERROR):
                 if status != self.HORIZON_ERROR:
                     self.draft = False
@@ -210,7 +212,17 @@ class LogVote(models.Model):
     vote_choice = models.CharField(max_length=15, choices=VOTE_TYPES, default=None, null=True)
     created_at = models.DateTimeField(default=None, null=True)
     asset_code = models.CharField(max_length=15, choices=ASSET_TYPES, default=settings.AQUA_ASSET_CODE)
-    hide = models.BooleanField(default=False)
+    hide = models.BooleanField(
+        default=False,
+        help_text=(
+            "System managed soft exclusion for this vote. Use cases: votes parsed after proposal end; "
+            "duplicates reingested with the same claimable_balance_id; votes invalidated after rule changes or failed "
+            "reverification; spam or abuse detection; temporary suppression during reprocessing. When True, the vote "
+            "remains stored but is excluded from public endpoints and all counts or quorum. Automatically set by "
+            "parser or background tasks; not edited manually. Part of the composite uniqueness with claimable_balance_id "
+            "to allow a hidden shadow row without conflicts."
+        ),
+    )
 
     class Meta:
         unique_together = [['hide', 'claimable_balance_id']]
