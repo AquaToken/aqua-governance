@@ -2,6 +2,7 @@ from datetime import datetime
 
 import requests
 from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 
 from django_quill.fields import QuillField
@@ -212,6 +213,7 @@ class LogVote(models.Model):
     vote_choice = models.CharField(max_length=15, choices=VOTE_TYPES, default=None, null=True)
     created_at = models.DateTimeField(default=None, null=True)
     asset_code = models.CharField(max_length=15, choices=ASSET_TYPES, default=settings.AQUA_ASSET_CODE)
+    time_list = ArrayField(models.DateTimeField(default=None, null=True), default=list)
     hide = models.BooleanField(
         default=False,
         help_text=(
