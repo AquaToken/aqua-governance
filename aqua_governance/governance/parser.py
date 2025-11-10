@@ -50,4 +50,5 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
         transaction_link=transaction_link,
         asset_code=asset_code,
         hide=hide,
+        time_list=time_list
     )
