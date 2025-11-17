@@ -163,19 +163,12 @@ def update_all_log_votes():
 
     for index, log_vote in enumerate(log_votes):
         start = time.perf_counter()
-        try:
-            claimable_balance = horizon_server.claimable_balances().claimable_balance(log_vote.claimable_balance_id).call()
-            proposal = log_vote.proposal
-            new_log_vote = parse_new_balance_info(claimable_balance, proposal, log_vote.vote_choice)
+        new_log_vote = load_claimable_balance_from_operations(horizon_server, log_vote)
+        if new_log_vote is None:
+            not_handled_vote_ids.append(log_vote.id)
+        else:
             new_log_vote_list.append(new_log_vote)
             delete_log_vote_id_list.append(log_vote.id)
-        except NotFoundError or ClaimableBalanceParsingError:
-            new_log_vote = try_load_claimable_balance_from_operations_or_transactions(log_vote)
-            if new_log_vote is None:
-                not_handled_vote_ids.append(log_vote.id)
-            else:
-                new_log_vote_list.append(new_log_vote)
-                delete_log_vote_id_list.append(log_vote.id)
 
         end = time.perf_counter()
         logger.info(
@@ -191,13 +184,16 @@ def update_all_log_votes():
     # LogVote.objects.bulk_create(new_log_vote_list)
     # LogVote.objects.bulk_update(update_log_vote_list, ['claimed'])
 
-def try_load_claimable_balance_from_operations_or_transactions(log_vote: LogVote) -> Optional[LogVote]:
-    horizon_server = Server(settings.HORIZON_URL)
+def load_claimable_balance_from_operations(horizon_server: Server, log_vote: LogVote) -> Optional[LogVote]:
+    claimed = False
+    new_log_vote: Optional[LogVote] = None
 
     try:
         operations = horizon_server.operations().for_claimable_balance(log_vote.claimable_balance_id).call()
         records = operations["_embedded"]["records"]
         for record in records:
+            if record['type'] == 'claim_claimable_balance' or record['type'] == 'clawback_claimable_balance':
+                claimed = True
             if record['type'] != 'create_claimable_balance':
                 continue
 
@@ -210,7 +206,7 @@ def try_load_claimable_balance_from_operations_or_transactions(log_vote: LogVote
             if not time_list:
                 return None
 
-            return LogVote(
+            new_log_vote = LogVote(
                 claimable_balance_id=log_vote.claimable_balance_id,
                 proposal=log_vote.proposal,
                 vote_choice=log_vote.vote_choice,
@@ -220,10 +216,13 @@ def try_load_claimable_balance_from_operations_or_transactions(log_vote: LogVote
                 transaction_link=log_vote.transaction_link,
                 asset_code=log_vote.asset_code,
                 hide=log_vote.hide,
-                claimed=True,
+                claimed=claimed,
                 time_list=time_list
             )
     except NotFoundError:
-        return None
+        pass
 
-    return None
+    if claimed:
+        new_log_vote.claimed = claimed
+
+    return new_log_vote
