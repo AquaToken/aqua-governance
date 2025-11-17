@@ -214,6 +214,7 @@ class LogVote(models.Model):
     created_at = models.DateTimeField(default=None, null=True)
     asset_code = models.CharField(max_length=15, choices=ASSET_TYPES, default=settings.AQUA_ASSET_CODE)
     time_list = ArrayField(models.DateTimeField(default=None, null=True), default=list)
+    claimed = models.BooleanField(default=False)
     hide = models.BooleanField(
         default=False,
         help_text=(
