@@ -9,7 +9,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from stellar_sdk import Asset, Server
-from stellar_sdk.exceptions import NotFoundError
+from stellar_sdk.exceptions import BaseHorizonError
 
 from aqua_governance.governance.exceptions import ClaimableBalanceParsingError
 from aqua_governance.governance.models import LogVote, Proposal
@@ -156,7 +156,6 @@ def update_all_log_votes():
     log_votes = LogVote.objects.filter(hide=False).order_by("-proposal_id").all()
     count_log_votes = len(log_votes)
 
-    update_log_vote_list = []
     new_log_vote_list = []
     delete_log_vote_id_list = []
     not_handled_vote_ids = []
@@ -174,7 +173,6 @@ def update_all_log_votes():
         logger.info(
             f"{index + 1}/{count_log_votes} Indexing log_vote: {log_vote.id}, proposal_id: {log_vote.proposal_id}, time: {end - start:.6f}")
 
-    print(f"update_log_vote_list: {len(update_log_vote_list)}")
     print(f"new_log_vote_list: {len(new_log_vote_list)}")
     print(f"delete_log_vote_id_list: {len(delete_log_vote_id_list)}")
     print(f"not_handled_vote_ids: {len(not_handled_vote_ids)}")
@@ -185,7 +183,7 @@ def update_all_log_votes():
     # LogVote.objects.bulk_update(update_log_vote_list, ['claimed'])
 
 def load_claimable_balance_from_operations(horizon_server: Server, log_vote: LogVote) -> Optional[LogVote]:
-    claimed = False
+    vote_claimed = False
     new_log_vote: Optional[LogVote] = None
 
     try:
@@ -193,7 +191,7 @@ def load_claimable_balance_from_operations(horizon_server: Server, log_vote: Log
         records = operations["_embedded"]["records"]
         for record in records:
             if record['type'] == 'claim_claimable_balance' or record['type'] == 'clawback_claimable_balance':
-                claimed = True
+                vote_claimed = True
             if record['type'] != 'create_claimable_balance':
                 continue
 
@@ -216,13 +214,13 @@ def load_claimable_balance_from_operations(horizon_server: Server, log_vote: Log
                 transaction_link=log_vote.transaction_link,
                 asset_code=log_vote.asset_code,
                 hide=log_vote.hide,
-                claimed=claimed,
+                claimed=vote_claimed,
                 time_list=time_list
             )
-    except NotFoundError:
-        pass
+    except BaseHorizonError:
+        logger.warning(f"Claimable Balance Load Error: {log_vote.id}", exc_info=sys.exc_info())
 
-    if claimed:
-        new_log_vote.claimed = claimed
+    if vote_claimed and new_log_vote is not None:
+        new_log_vote.claimed = vote_claimed
 
     return new_log_vote
