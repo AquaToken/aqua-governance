@@ -154,11 +154,11 @@ def check_proposals_with_bad_horizon_error():
 
 @celery_app.task(ignore_result=True)
 def update_all_log_votes():
-    load_and_enrichment_votes()
-    normalize_vote_group_index()
+    _load_and_enrichment_votes()
+    _normalize_vote_group_index()
 
 
-def load_and_enrichment_votes():
+def _load_and_enrichment_votes():
     horizon_server = Server(settings.HORIZON_URL)
     log_votes = LogVote.objects.filter(hide=False).order_by("-proposal_id")
     count_log_votes = len(log_votes)
@@ -187,7 +187,7 @@ def load_and_enrichment_votes():
     LogVote.objects.bulk_create(new_log_vote_list)
 
 
-def normalize_vote_group_index():
+def _normalize_vote_group_index():
     logger.info("Normalizing log_vote_group_index.")
     log_votes = LogVote.objects.filter(hide=False).order_by("-proposal_id")
     count_log_votes = len(log_votes)
