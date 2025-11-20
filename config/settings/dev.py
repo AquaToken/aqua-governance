@@ -20,7 +20,7 @@ MANAGERS = ADMINS
 # --------------------------------------------------------------------------
 
 DATABASES = {
-    'default': env.db(default='postgres://localhost/aqua_governance'),
+    'default': env.db(default='postgres://postgres:postgres@127.0.0.1:5432/aqua_governance'),
 }
 
 
@@ -65,6 +65,6 @@ SENTRY_ENABLED = False
 # --------------------------------------------------------------------------
 
 STELLAR_PASSPHRASE = 'Test SDF Network ; September 2015'
-HORIZON_URL = 'https://horizon-testnet.stellar.org'
+HORIZON_URL = 'https://horizon.stellar.org'
 
 NETWORK_PASSPHRASE = Network.testnet_network().network_passphrase
