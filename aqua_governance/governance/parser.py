@@ -1,5 +1,6 @@
 import hashlib
 from datetime import timedelta
+from typing import Optional
 
 from dateutil.parser import parse as date_parse
 from django.conf import settings
@@ -14,45 +15,44 @@ ICE_ASSET = Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_AS
 GDICE_ASSET = Asset(settings.GDICE_ASSET_CODE, settings.GDICE_ASSET_ISSUER)
 
 
-def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice: str, hide=False):
+def parse_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, proposal: Proposal, vote_choice: str,
+               created_at: str, original_amount: str, vote_id: Optional[int]) -> Optional[LogVote]:
     balance_id = claimable_balance['id']
     asset = parse_asset_string(claimable_balance['asset'])
     asset_code = claimable_balance['asset'].split(':')[0]
     amount = claimable_balance['amount']
+    last_update_at = claimable_balance['last_modified_time']
     sponsor = claimable_balance['sponsor']
-    last_modified_time = claimable_balance['last_modified_time']
     transaction_link = claimable_balance['_links']['transactions']['href'].replace('{?cursor,limit,order}', '')
-
-    claimants = claimable_balance['claimants']
 
     if asset not in [AQUA_ASSET, ICE_ASSET, GDICE_ASSET]:
         return None
 
-    if last_modified_time is None:
-        last_modified_time = str(proposal.created_at)
-
-    time_list = []
-    for claimant in claimants:
-        abs_before = claimant.get('predicate', None).get('not', None).get('abs_before', None)
-        if asset == AQUA_ASSET and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1) + 2 * (date_parse(last_modified_time) - timedelta(minutes=15) - proposal.start_at):
-            time_list.append(abs_before)
-        elif asset in [ICE_ASSET, GDICE_ASSET] and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1):
-            sponsor = claimant['destination']
-            time_list.append(abs_before)
+    time_list, account_issuer = _make_time_list_and_sponsor_for_vote(claimable_balance, proposal)
     if not time_list:
         return None
 
+    if last_update_at is None:
+        last_update_at = created_at
+
     return LogVote(
+        id=vote_id,
+        key=vote_key,
+        group_index=vote_group_index,
         claimable_balance_id=balance_id,
         proposal=proposal,
         vote_choice=vote_choice,
-        amount=amount,
-        account_issuer=sponsor,
-        created_at=last_modified_time,
+        current_amount=amount,
+        original_amount=original_amount,
+        account_issuer=account_issuer,
+        sponsor=sponsor,
+        created_at=created_at,
+        last_update_at=last_update_at,
         transaction_link=transaction_link,
         asset_code=asset_code,
-        hide=hide,
-        claimed=False,
+        hide=False,
+        time_list=time_list,
+        claimed=False
     )
 
 

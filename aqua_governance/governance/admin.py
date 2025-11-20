@@ -45,17 +45,31 @@ class ProposalAdmin(admin.ModelAdmin):
 
 @admin.register(LogVote)
 class LogVoteAdmin(admin.ModelAdmin):
-    list_display = ['asset_code', 'current_amount', 'vote_choice', 'created_at']
+    list_display = ['key', 'group_index', 'asset_code', 'vote_choice', 'created_at', 'last_update_at', 'sponsor', 'account_issuer', 'current_amount', 'original_amount']
     readonly_fields = [
         'asset_code',
         'claimable_balance_id', 'transaction_link', 'account_issuer', 'current_amount', 'proposal', 'vote_choice', 'created_at',
     ]
-    search_fields = ['proposal__id', 'proposal__vote_for_issuer', 'proposal__vote_against_issuer']
+    search_fields = ['key', 'proposal__id', 'proposal__vote_for_issuer', 'proposal__vote_against_issuer']
     fields = [
+        'key',
+        'group_index',
         'asset_code',
-        'claimable_balance_id', 'transaction_link', 'account_issuer', 'current_amount', 'proposal', 'vote_choice', 'created_at',
+        'claimable_balance_id',
+        'transaction_link',
+        'account_issuer',
+        'sponsor',
+        'current_amount',
+        'original_amount',
+        'proposal',
+        'vote_choice',
+        'created_at',
+        'last_update_at',
+        'claimed',
+        'hide',
+        'time_list',
     ]
-    list_filter = ('vote_choice', )
+    list_filter = ('vote_choice', 'group_index', 'claimed')
 
     def has_change_permission(self, request, obj=None):
         return False
