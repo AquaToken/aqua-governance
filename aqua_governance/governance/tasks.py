@@ -237,7 +237,6 @@ def _load_claimable_balance_from_operations(horizon_server: Server, log_vote: Lo
 
             created_at = date_parse(record['created_at'])
             amount = record['amount']
-            sponsor = record['sponsor']
             key = generate_vote_key_by_raw_data(
                 log_vote.proposal_id,
                 log_vote.vote_choice,
@@ -256,7 +255,6 @@ def _load_claimable_balance_from_operations(horizon_server: Server, log_vote: Lo
                 amount=log_vote.amount,
                 original_amount=amount,
                 account_issuer=log_vote.account_issuer,
-                sponsor=sponsor,
                 created_at=created_at,
                 last_update_at=log_vote.created_at,
                 transaction_link=log_vote.transaction_link,
