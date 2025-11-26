@@ -170,7 +170,7 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
 
         # Sorting raw_vote_group and parse new votes or update old votes
         for vote_key, raw_vote_group in raw_vote_groups.items():
-            raw_vote_group.sort(key=lambda item: int(item[1]['amount']), reverse=True)
+            raw_vote_group.sort(key=lambda item: float(item[1]['amount']), reverse=True)
 
             votes = all_votes.filter(key=vote_key)
             for vote_group_index, (vote_choice, raw_vote) in enumerate(raw_vote_group):
