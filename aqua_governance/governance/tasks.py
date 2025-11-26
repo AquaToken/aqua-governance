@@ -188,6 +188,7 @@ def _load_and_enrichment_votes():
 
     LogVote.objects.filter(id__in=delete_log_vote_id_list).delete()
     LogVote.objects.bulk_create(new_log_vote_list)
+    LogVote.objects.bulk_update(update_log_vote_list, ["claimed"])
 
 
 def _normalize_vote_group_index():
