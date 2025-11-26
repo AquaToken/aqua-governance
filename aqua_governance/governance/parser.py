@@ -14,7 +14,7 @@ ICE_ASSET = Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_AS
 GDICE_ASSET = Asset(settings.GDICE_ASSET_CODE, settings.GDICE_ASSET_ISSUER)
 
 
-def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice: str, hide=False):
+def parse_log_vote_from_claimable_balance(claimable_balance: dict, proposal: Proposal, vote_choice: str, hide=False):
     balance_id = claimable_balance['id']
     asset = parse_asset_string(claimable_balance['asset'])
     asset_code = claimable_balance['asset'].split(':')[0]
@@ -34,9 +34,11 @@ def parse_balance_info(claimable_balance: dict, proposal: Proposal, vote_choice:
     time_list = []
     for claimant in claimants:
         abs_before = claimant.get('predicate', None).get('not', None).get('abs_before', None)
-        if asset == AQUA_ASSET and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1) + 2 * (date_parse(last_modified_time) - timedelta(minutes=15) - proposal.start_at):
+        if asset == AQUA_ASSET and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(
+            seconds=1) + 2 * (date_parse(last_modified_time) - timedelta(minutes=15) - proposal.start_at):
             time_list.append(abs_before)
-        elif asset in [ICE_ASSET, GDICE_ASSET] and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(seconds=1):
+        elif asset in [ICE_ASSET, GDICE_ASSET] and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(
+            seconds=1):
             sponsor = claimant['destination']
             time_list.append(abs_before)
     if not time_list:
@@ -67,9 +69,17 @@ def generate_vote_key(claimable_balance: dict, proposal: Proposal, vote_choice: 
 
     return generate_vote_key_by_raw_data(proposal_id, vote_choice, sponsor, asset.code, time_list)
 
-def generate_vote_key_by_raw_data(proposal_id: int, vote_choice: str, sponsor: str, asset: str, time_list: list[str]) -> str:
+
+def generate_vote_key_by_raw_data(proposal_id: int, vote_choice: str, sponsor: str, asset: str,
+                                  time_list: list[str]) -> str:
     payload = f"{proposal_id}|{vote_choice}|{sponsor}|{asset}|{sorted(time_list)}"
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def quant_percent(value, percent_step):
+    step = value * (percent_step / 100)
+    return round(value / step) * step
+
 
 def _make_time_list_and_sponsor_for_vote(claimable_balance: dict, proposal: Proposal) -> tuple[list[str], str]:
     asset = parse_asset_string(claimable_balance['asset'])

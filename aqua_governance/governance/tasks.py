@@ -14,7 +14,7 @@ from stellar_sdk.exceptions import BaseHorizonError
 
 from aqua_governance.governance.exceptions import ClaimableBalanceParsingError, GenerateGrouKeyException
 from aqua_governance.governance.models import LogVote, Proposal
-from aqua_governance.governance.parser import parse_balance_info, generate_vote_key_by_raw_data
+from aqua_governance.governance.parser import parse_log_vote_from_claimable_balance, generate_vote_key_by_raw_data
 from aqua_governance.taskapp import app as celery_app
 from aqua_governance.utils.requests import load_all_records
 from aqua_governance.utils.signals import DisableSignals
@@ -32,7 +32,7 @@ def _parse_claimable_balance(claimable_balance: dict, proposal: Proposal, log_vo
         return
 
     try:
-        return parse_balance_info(claimable_balance, proposal, log_vote)
+        return parse_log_vote_from_claimable_balance(claimable_balance, proposal, log_vote)
     except ClaimableBalanceParsingError:
         logger.warning('Balance info skipped.', exc_info=sys.exc_info())
 
@@ -117,32 +117,33 @@ def task_check_expired_proposals():
 
 @celery_app.task(ignore_result=True)
 def task_update_hidden_ice_votes_in_voted_proposals():
-    voted_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTED)
-    horizon_server = Server(settings.HORIZON_URL)
-
-    for proposal in voted_proposals:
-        new_hidden_log_vote_list = []
-        # TODO: Rollback asset filter after closing issue. https://github.com/stellar/go/issues/5199
-        request_builders = (
-            (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
-                LogVote.VOTE_FOR,
-            ),
-            (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
-                LogVote.VOTE_AGAINST,
-            ),
-        )
-        for request_builder in request_builders:
-            for balance in load_all_records(request_builder[0]):
-                try:
-                    claimable_balance = parse_balance_info(balance, proposal, request_builder[1], hide=True)
-                    if claimable_balance:
-                        new_hidden_log_vote_list.append(claimable_balance)
-                except ClaimableBalanceParsingError:
-                    logger.warning('Balance info skipped.', exc_info=sys.exc_info())
-        proposal.logvote_set.filter(hide=True).delete()
-        LogVote.objects.bulk_create(new_hidden_log_vote_list)
+    update_all_log_votes()
+    # voted_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTED)
+    # horizon_server = Server(settings.HORIZON_URL)
+    #
+    # for proposal in voted_proposals:
+    #     new_hidden_log_vote_list = []
+    #     # TODO: Rollback asset filter after closing issue. https://github.com/stellar/go/issues/5199
+    #     request_builders = (
+    #         (
+    #             horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
+    #             LogVote.VOTE_FOR,
+    #         ),
+    #         (
+    #             horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
+    #             LogVote.VOTE_AGAINST,
+    #         ),
+    #     )
+    #     for request_builder in request_builders:
+    #         for balance in load_all_records(request_builder[0]):
+    #             try:
+    #                 claimable_balance = parse_log_vote_from_claimable_balance(balance, proposal, request_builder[1], hide=True)
+    #                 if claimable_balance:
+    #                     new_hidden_log_vote_list.append(claimable_balance)
+    #             except ClaimableBalanceParsingError:
+    #                 logger.warning('Balance info skipped.', exc_info=sys.exc_info())
+    #     proposal.logvote_set.filter(hide=True).delete()
+    #     LogVote.objects.bulk_create(new_hidden_log_vote_list)
 
 
 @celery_app.task(ignore_result=True)
@@ -169,7 +170,7 @@ def _load_and_enrichment_votes():
 
     for index, log_vote in enumerate(log_votes):
         start = time.perf_counter()
-        new_log_vote = load_claimable_balance_from_operations(horizon_server, log_vote)
+        new_log_vote = _load_claimable_balance_from_operations(horizon_server, log_vote)
         if new_log_vote is None:
             not_handled_votes_count += 1
         else:
@@ -189,7 +190,7 @@ def _load_and_enrichment_votes():
 
 def _normalize_vote_group_index():
     logger.info("Normalizing log_vote_group_index.")
-    log_votes = LogVote.objects.filter(hide=False).order_by("-proposal_id")
+    log_votes = LogVote.objects.filter(key__isnull=False).order_by("-proposal_id")
     count_log_votes = len(log_votes)
 
     for vote_index, vote in enumerate(log_votes):
@@ -213,7 +214,7 @@ def _normalize_vote_group_index():
     logger.info("Normalizing log_vote_group_index finished.")
 
 
-def load_claimable_balance_from_operations(horizon_server: Server, log_vote: LogVote) -> Optional[LogVote]:
+def _load_claimable_balance_from_operations(horizon_server: Server, log_vote: LogVote) -> Optional[LogVote]:
     vote_claimed = False
     new_log_vote: Optional[LogVote] = None
 
@@ -253,7 +254,7 @@ def load_claimable_balance_from_operations(horizon_server: Server, log_vote: Log
                 claimable_balance_id=log_vote.claimable_balance_id,
                 proposal=log_vote.proposal,
                 vote_choice=log_vote.vote_choice,
-                current_amount=log_vote.current_amount,
+                amount=log_vote.amount,
                 original_amount=amount,
                 account_issuer=log_vote.account_issuer,
                 sponsor=sponsor,
@@ -266,7 +267,7 @@ def load_claimable_balance_from_operations(horizon_server: Server, log_vote: Log
                 claimed=vote_claimed,
             )
     except BaseHorizonError:
-        logger.warning(f"Claimable Balance Load Error: {log_vote.id}", exc_info=sys.exc_info())
+        logger.warning(f"Claimable Balance Load Error: {log_vote.id} {log_vote.claimable_balance_id}", exc_info=sys.exc_info())
     except GenerateGrouKeyException:
         logger.warning(f"Generate Group Key Error: {log_vote.id}", exc_info=sys.exc_info())
 

@@ -228,7 +228,7 @@ class LogVote(models.Model):
             ""
         )
     )
-    current_amount = models.DecimalField(
+    amount = models.DecimalField(
         decimal_places=7,
         max_digits=20,
         blank=True,
