@@ -19,6 +19,11 @@ app.conf.timezone = 'UTC'
 @app.on_after_finalize.connect
 def setup_periodic_tasks(sender, **kwargs):
     app.conf.beat_schedule.update({
+        'aqua_governance.governance.tasks.task_update_active_proposals': {
+            'task': 'aqua_governance.governance.tasks.task_update_active_proposals',
+            'schedule': crontab(minute='*/5'),
+            'args': (),
+        },
         'aqua_governance.governance.tasks.task_check_expired_proposals': {
             'task': 'aqua_governance.governance.tasks.task_check_expired_proposals',
             'schedule': crontab(minute='0', hour='*/24'),
@@ -31,7 +36,7 @@ def setup_periodic_tasks(sender, **kwargs):
         },
         'aqua_governance.governance.tasks.task_update_votes': {
             'task': 'aqua_governance.governance.tasks.task_update_votes',
-            'schedule': crontab(minute='*/1'),
+            'schedule': crontab(minute='*/10'),
             'args': (),
         },
     })

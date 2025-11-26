@@ -1,6 +1,7 @@
 import logging
 import sys
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Optional, Any
 
 from dateutil.parser import parse as date_parse
@@ -70,6 +71,9 @@ logger = logging.getLogger()
 
 @celery_app.task(ignore_result=True)
 def task_update_proposal_status(proposal_id):
+    """
+    Update proposal status, votes and results before the end of voting
+    """
     proposal = Proposal.objects.get(id=proposal_id)
     if proposal.end_at <= timezone.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
         proposal.proposal_status = Proposal.VOTED
@@ -78,59 +82,36 @@ def task_update_proposal_status(proposal_id):
         _update_proposal_final_results(proposal_id)
 
 
-# TODO: old code
-# @celery_app.task(ignore_result=True)
-# def task_update_active_proposals():
-#     now = datetime.now()
-#     active_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTING, start_at__lte=now, end_at__gte=now)
-#
-#     for proposal in active_proposals:
-#         task_update_proposal_result.delay(proposal.id)
+@celery_app.task(ignore_result=True)
+def task_update_active_proposals():
+    """
+    Update active proposals
+    """
+    now = datetime.now()
+    active_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTING, start_at__lte=now, end_at__gte=now)
+
+    for proposal in active_proposals:
+        task_update_votes.delay(proposal.id)
+        _update_proposal_final_results(proposal.id)
 
 
 @celery_app.task(ignore_result=True)
 def task_check_expired_proposals():
+    """
+    Check expired proposals
+    """
     expired_period = datetime.now() - settings.EXPIRED_TIME
     proposals = Proposal.objects.filter(proposal_status=Proposal.DISCUSSION, last_updated_at__lte=expired_period)
     proposals.update(proposal_status=Proposal.EXPIRED)
 
 
-# TODO: old code
-# @celery_app.task(ignore_result=True)
-# def task_update_hidden_ice_votes_in_voted_proposals():
-#     voted_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTED)
-#     horizon_server = Server(settings.HORIZON_URL)
-#
-#     for proposal in voted_proposals:
-#         new_hidden_log_vote_list = []
-#         # TODO: Rollback asset filter after closing issue. https://github.com/stellar/go/issues/5199
-#         request_builders = (
-#             (
-#                 horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
-#                 LogVote.VOTE_FOR,
-#             ),
-#             (
-#                 horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
-#                 LogVote.VOTE_AGAINST,
-#             ),
-#         )
-#         for request_builder in request_builders:
-#             for balance in load_all_records(request_builder[0]):
-#                 try:
-#                     claimable_balance = parse_balance_info(balance, proposal, request_builder[1], hide=True)
-#                     if claimable_balance:
-#                         new_hidden_log_vote_list.append(claimable_balance)
-#                 except ClaimableBalanceParsingError:
-#                     logger.warning('Balance info skipped.', exc_info=sys.exc_info())
-#         proposal.logvote_set.filter(hide=True).delete()
-#         LogVote.objects.bulk_create(new_hidden_log_vote_list)
-
-
 @celery_app.task(ignore_result=True)
 def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool = False):
+    """
+    Update votes for proposal
+    """
     if proposal_id is None:
-        proposals = Proposal.objects.filter(
-            proposal_status__in=[Proposal.VOTING, Proposal.VOTED, Proposal.EXPIRED]).order_by("-id")
+        proposals = Proposal.objects.filter(proposal_status__in=[Proposal.VOTED]).order_by("-id")
     else:
         proposals = Proposal.objects.filter(id=proposal_id)
 
@@ -170,7 +151,7 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
 
         # Sorting raw_vote_group and parse new votes or update old votes
         for vote_key, raw_vote_group in raw_vote_groups.items():
-            raw_vote_group.sort(key=lambda item: float(item[1]['amount']), reverse=True)
+            raw_vote_group.sort(key=lambda item: Decimal(item[1]['amount']), reverse=True)
 
             votes = all_votes.filter(key=vote_key)
             for vote_group_index, (vote_choice, raw_vote) in enumerate(raw_vote_group):
@@ -202,7 +183,7 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
 
         LogVote.objects.bulk_create(new_log_vote)
         LogVote.objects.bulk_update(update_log_vote,
-                                    ["claimable_balance_id", "current_amount", "transaction_link", "last_update_at"])
+                                    ["claimable_balance_id", "amount", "voted_amount", "transaction_link", "claimed"])
         LogVote.objects.bulk_update(claimed_log_vote, ["claimed"])
 
 

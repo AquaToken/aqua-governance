@@ -1,7 +1,7 @@
 from django.db.models import Prefetch
 from rest_framework.filters import BaseFilterBackend
 
-from aqua_governance.governance.models import Proposal,LogVote
+from aqua_governance.governance.models import Proposal, LogVote
 
 
 class HideFilterBackend(BaseFilterBackend):  # TODO: remove it
@@ -52,13 +52,16 @@ class ProposalOwnerFilterBackend(BaseFilterBackend):
 class ProposalVoteOwnerFilterBackend(BaseFilterBackend):
     def filter_queryset(self, request, queryset, view):
         public_key = request.query_params.get('vote_owner_public_key')
-        hide = not bool(request.query_params.get('active', False))
+        claimed = not bool(request.query_params.get('active', False))
         if public_key:
-            return queryset.filter(logvote__account_issuer=public_key, logvote__hide=hide).distinct().prefetch_related(
-                Prefetch('logvote_set', LogVote.objects.filter(account_issuer=public_key, hide=hide).order_by('-created_at')),
+            return queryset.filter(logvote__account_issuer=public_key, logvote__claimed=claimed,
+                                   logvote__hide=False).distinct().prefetch_related(
+                Prefetch('logvote_set',
+                         LogVote.objects.filter(account_issuer=public_key, claimed=claimed, hide=False).order_by(
+                             '-created_at')),
             )
         return queryset.prefetch_related(
-            Prefetch('logvote_set', LogVote.objects.filter(hide=False).order_by('-created_at')),
+            Prefetch('logvote_set', LogVote.objects.filter(claimed=claimed, hide=False).order_by('-created_at')),
         )
 
 
