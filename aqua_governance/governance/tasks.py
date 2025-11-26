@@ -259,7 +259,6 @@ def _load_claimable_balance_from_operations(horizon_server: Server, log_vote: Lo
                 transaction_link=log_vote.transaction_link,
                 asset_code=log_vote.asset_code,
                 hide=log_vote.hide,
-                time_list=time_list,
                 claimed=vote_claimed,
             )
     except BaseHorizonError:
