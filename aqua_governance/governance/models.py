@@ -212,9 +212,6 @@ class LogVote(models.Model):
     vote_choice = models.CharField(max_length=15, choices=VOTE_TYPES, default=None, null=True)
     asset_code = models.CharField(max_length=15, choices=ASSET_TYPES, default=settings.AQUA_ASSET_CODE)
     created_at = models.DateTimeField(default=None, null=True)
-    last_update_at = models.DateTimeField(default=None, null=True)
-    sponsor = models.CharField(max_length=56, null=True)
-    time_list = ArrayField(models.DateTimeField(default=None, null=True), default=list)
     key = models.CharField(
         max_length=66,
         null=True,
@@ -228,7 +225,7 @@ class LogVote(models.Model):
             ""
         )
     )
-    current_amount = models.DecimalField(
+    amount = models.DecimalField(
         decimal_places=7,
         max_digits=20,
         blank=True,
@@ -238,6 +235,15 @@ class LogVote(models.Model):
         )
     )
     original_amount = models.DecimalField(
+        decimal_places=7,
+        max_digits=20,
+        blank=True,
+        null=True,
+        help_text=(
+            ""
+        )
+    )
+    voted_amount = models.DecimalField(
         decimal_places=7,
         max_digits=20,
         blank=True,

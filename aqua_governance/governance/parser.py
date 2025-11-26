@@ -21,8 +21,6 @@ def parse_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, pr
     asset = parse_asset_string(claimable_balance['asset'])
     asset_code = claimable_balance['asset'].split(':')[0]
     amount = claimable_balance['amount']
-    last_update_at = claimable_balance['last_modified_time']
-    sponsor = claimable_balance['sponsor']
     transaction_link = claimable_balance['_links']['transactions']['href'].replace('{?cursor,limit,order}', '')
 
     if asset not in [AQUA_ASSET, ICE_ASSET, GDICE_ASSET]:
@@ -32,9 +30,6 @@ def parse_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, pr
     if not time_list:
         return None
 
-    if last_update_at is None:
-        last_update_at = created_at
-
     return LogVote(
         id=vote_id,
         key=vote_key,
@@ -42,16 +37,14 @@ def parse_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, pr
         claimable_balance_id=balance_id,
         proposal=proposal,
         vote_choice=vote_choice,
-        current_amount=amount,
+        amount=amount,
         original_amount=original_amount,
         account_issuer=account_issuer,
-        sponsor=sponsor,
+        sponsor=account_issuer,
         created_at=created_at,
-        last_update_at=last_update_at,
         transaction_link=transaction_link,
         asset_code=asset_code,
         hide=False,
-        time_list=time_list,
         claimed=False
     )
 
@@ -59,21 +52,23 @@ def parse_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, pr
 def generate_vote_key(claimable_balance: dict, proposal: Proposal, vote_choice: str) -> str:
     asset = parse_asset_string(claimable_balance['asset'])
 
-    time_list, sponsor = _make_time_list_and_sponsor_for_vote(claimable_balance, proposal)
+    time_list, account_issuer = _make_time_list_and_account_issuer_for_vote(claimable_balance, proposal)
     proposal_id = proposal.id
 
     if not time_list:
         raise GenerateGrouKeyException("Invalid claimable_balance: time_list is empty")
 
-    return generate_vote_key_by_raw_data(proposal_id, vote_choice, sponsor, asset.code, time_list)
+    return generate_vote_key_by_raw_data(proposal_id, vote_choice, account_issuer, asset.code, time_list)
 
-def generate_vote_key_by_raw_data(proposal_id: int, vote_choice: str, sponsor: str, asset: str, time_list: list[str]) -> str:
-    payload = f"{proposal_id}|{vote_choice}|{sponsor}|{asset}|{sorted(time_list)}"
+
+def generate_vote_key_by_raw_data(proposal_id: int, vote_choice: str, account_issuer: str, asset: str,
+                                  time_list: list[str]) -> str:
+    payload = f"{proposal_id}|{vote_choice}|{account_issuer}|{asset}|{sorted(time_list)}"
     return hashlib.sha256(payload.encode()).hexdigest()
 
-def _make_time_list_and_sponsor_for_vote(claimable_balance: dict, proposal: Proposal) -> tuple[list[str], str]:
+def _make_time_list_and_account_issuer_for_vote(claimable_balance: dict, proposal: Proposal) -> tuple[list[str], str]:
     asset = parse_asset_string(claimable_balance['asset'])
-    sponsor = claimable_balance['sponsor']
+    account_issuer = claimable_balance['account_issuer']
     last_modified_time = claimable_balance['last_modified_time']
     claimants: list = claimable_balance['claimants']
     time_list: list[str] = []
@@ -88,7 +83,7 @@ def _make_time_list_and_sponsor_for_vote(claimable_balance: dict, proposal: Prop
             time_list.append(abs_before)
         elif asset in [ICE_ASSET, GDICE_ASSET] and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(
             seconds=1):
-            sponsor = claimant['destination']
+            account_issuer = claimant['destination']
             time_list.append(abs_before)
 
-    return time_list, sponsor
+    return time_list, account_issuer
