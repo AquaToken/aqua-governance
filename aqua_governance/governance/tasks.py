@@ -1,6 +1,5 @@
 import logging
 import sys
-import time
 from datetime import datetime, timedelta
 from typing import Optional, Any
 
@@ -10,11 +9,11 @@ from django.conf import settings
 from django.utils import timezone
 
 from stellar_sdk import Server
-from stellar_sdk.exceptions import BaseHorizonError, NotFoundError
+from stellar_sdk.exceptions import NotFoundError
 
 from aqua_governance.governance.exceptions import ClaimableBalanceParsingError, GenerateGrouKeyException
 from aqua_governance.governance.models import LogVote, Proposal
-from aqua_governance.governance.parser import generate_vote_key_by_raw_data, generate_vote_key, parse_vote
+from aqua_governance.governance.parser import generate_vote_key, parse_vote
 from aqua_governance.taskapp import app as celery_app
 from aqua_governance.utils.requests import load_all_records
 from aqua_governance.utils.signals import DisableSignals
@@ -75,7 +74,7 @@ def task_update_proposal_status(proposal_id):
     if proposal.end_at <= timezone.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
         proposal.proposal_status = Proposal.VOTED
         proposal.save()
-        task_update_votes.delay(proposal_id)
+        task_update_votes.delay(proposal_id, True)
         _update_proposal_final_results(proposal_id)
 
 
@@ -128,7 +127,7 @@ def task_check_expired_proposals():
 
 
 @celery_app.task(ignore_result=True)
-def task_update_votes(proposal_id: Optional[int] = None):
+def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool = False):
     if proposal_id is None:
         proposals = Proposal.objects.filter(
             proposal_status__in=[Proposal.VOTING, Proposal.VOTED, Proposal.EXPIRED]).order_by("-id")
@@ -138,7 +137,6 @@ def task_update_votes(proposal_id: Optional[int] = None):
     horizon_server = Server(settings.HORIZON_URL)
 
     for proposal in proposals:
-        logger.info(f"Update proposal {proposal.id}")
         request_builders = (
             (
                 horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
@@ -172,19 +170,27 @@ def task_update_votes(proposal_id: Optional[int] = None):
 
         # Sorting raw_vote_group and parse new votes or update old votes
         for vote_key, raw_vote_group in raw_vote_groups.items():
-            raw_vote_group.sort(key=lambda item: item[1]['amount'], reverse=True)
+            raw_vote_group.sort(key=lambda item: int(item[1]['amount']), reverse=True)
 
             votes = all_votes.filter(key=vote_key)
             for vote_group_index, (vote_choice, raw_vote) in enumerate(raw_vote_group):
                 vote = votes.filter(group_index=vote_group_index)
                 try:
                     if vote.exists():
-                        update_vote = _make_updated_vote(vote.get(), vote_group_index, raw_vote)
-                        update_log_vote.append(update_vote)
+                        update_vote = _make_updated_vote(vote.get(), vote_group_index, raw_vote, freezing_amount)
+                        if update_vote:
+                            update_log_vote.append(update_vote)
+                            indexed_vote_keys_and_index.append((vote_key, vote_group_index))
+                        else:
+                            logger.warning(f'Error updating vote for {vote_key}, {vote_group_index}')
                     else:
-                        new_vote = _make_new_vote(vote_key, vote_group_index, raw_vote, proposal, vote_choice)
-                        new_log_vote.append(new_vote)
-                    indexed_vote_keys_and_index.append((vote_key, vote_group_index))
+                        new_vote = _make_new_vote(vote_key, vote_group_index, raw_vote, proposal, vote_choice,
+                                                  freezing_amount)
+                        if new_vote:
+                            new_log_vote.append(new_vote)
+                            indexed_vote_keys_and_index.append((vote_key, vote_group_index))
+                        else:
+                            logger.warning(f'Error create vote for {vote_key}, {vote_group_index}')
                 except ClaimableBalanceParsingError:
                     logger.warning('Balance info skipped.', exc_info=sys.exc_info())
 
@@ -207,7 +213,8 @@ def check_proposals_with_bad_horizon_error():
         proposal.check_transaction()
 
 
-def _make_new_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, proposal: Proposal, vote_choice: str):
+def _make_new_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, proposal: Proposal, vote_choice: str,
+                   freezing_amount: bool):
     balance_id = claimable_balance['id']
     original_amount = ""
     created_at = ""
@@ -234,11 +241,12 @@ def _make_new_vote(vote_key: str, vote_group_index: int, claimable_balance: dict
         vote_choice=vote_choice,
         created_at=created_at,
         original_amount=original_amount,
-        vote_id=None
+        vote_id=None,
+        freezing_amount=freezing_amount
     )
 
 
-def _make_updated_vote(vote: LogVote, vote_group_index: int, claimable_balance: dict):
+def _make_updated_vote(vote: LogVote, vote_group_index: int, claimable_balance: dict, freezing_amount: bool):
     created_at = str(vote.created_at)
     original_amount = str(vote.original_amount)
 
@@ -250,7 +258,8 @@ def _make_updated_vote(vote: LogVote, vote_group_index: int, claimable_balance: 
         vote_choice=vote.vote_choice,
         created_at=created_at,
         original_amount=original_amount,
-        vote_id=vote.id
+        vote_id=vote.id,
+        freezing_amount=freezing_amount
     )
 
 

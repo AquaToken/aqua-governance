@@ -16,7 +16,7 @@ GDICE_ASSET = Asset(settings.GDICE_ASSET_CODE, settings.GDICE_ASSET_ISSUER)
 
 
 def parse_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, proposal: Proposal, vote_choice: str,
-               created_at: str, original_amount: str, vote_id: Optional[int]) -> Optional[LogVote]:
+               created_at: str, original_amount: str, vote_id: Optional[int], freezing_amount: bool = False) -> Optional[LogVote]:
     balance_id = claimable_balance['id']
     asset = parse_asset_string(claimable_balance['asset'])
     asset_code = claimable_balance['asset'].split(':')[0]
@@ -26,9 +26,13 @@ def parse_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, pr
     if asset not in [AQUA_ASSET, ICE_ASSET, GDICE_ASSET]:
         return None
 
-    time_list, account_issuer = _make_time_list_and_sponsor_for_vote(claimable_balance, proposal)
+    time_list, account_issuer = _make_time_list_and_account_issuer_for_vote(claimable_balance, proposal)
     if not time_list:
         return None
+
+    voted_amount = 0
+    if freezing_amount:
+        voted_amount = amount
 
     return LogVote(
         id=vote_id,
@@ -39,8 +43,8 @@ def parse_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, pr
         vote_choice=vote_choice,
         amount=amount,
         original_amount=original_amount,
+        voted_amount=voted_amount,
         account_issuer=account_issuer,
-        sponsor=account_issuer,
         created_at=created_at,
         transaction_link=transaction_link,
         asset_code=asset_code,
@@ -68,7 +72,7 @@ def generate_vote_key_by_raw_data(proposal_id: int, vote_choice: str, account_is
 
 def _make_time_list_and_account_issuer_for_vote(claimable_balance: dict, proposal: Proposal) -> tuple[list[str], str]:
     asset = parse_asset_string(claimable_balance['asset'])
-    account_issuer = claimable_balance['account_issuer']
+    account_issuer = claimable_balance['sponsor']
     last_modified_time = claimable_balance['last_modified_time']
     claimants: list = claimable_balance['claimants']
     time_list: list[str] = []
