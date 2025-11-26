@@ -164,6 +164,7 @@ def _load_and_enrichment_votes():
     count_log_votes = len(log_votes)
 
     new_log_vote_list = []
+    update_log_vote_list = []
     delete_log_vote_id_list = []
     not_handled_votes_count = 0
 
@@ -171,6 +172,8 @@ def _load_and_enrichment_votes():
         start = time.perf_counter()
         new_log_vote = _load_claimable_balance_from_operations(horizon_server, log_vote)
         if new_log_vote is None:
+            log_vote.claimed = True
+            update_log_vote_list.append(log_vote)
             not_handled_votes_count += 1
         else:
             new_log_vote_list.append(new_log_vote)
