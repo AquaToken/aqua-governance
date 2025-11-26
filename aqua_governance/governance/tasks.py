@@ -117,33 +117,32 @@ def task_check_expired_proposals():
 
 @celery_app.task(ignore_result=True)
 def task_update_hidden_ice_votes_in_voted_proposals():
-    update_all_log_votes()
-    # voted_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTED)
-    # horizon_server = Server(settings.HORIZON_URL)
-    #
-    # for proposal in voted_proposals:
-    #     new_hidden_log_vote_list = []
-    #     # TODO: Rollback asset filter after closing issue. https://github.com/stellar/go/issues/5199
-    #     request_builders = (
-    #         (
-    #             horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
-    #             LogVote.VOTE_FOR,
-    #         ),
-    #         (
-    #             horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
-    #             LogVote.VOTE_AGAINST,
-    #         ),
-    #     )
-    #     for request_builder in request_builders:
-    #         for balance in load_all_records(request_builder[0]):
-    #             try:
-    #                 claimable_balance = parse_log_vote_from_claimable_balance(balance, proposal, request_builder[1], hide=True)
-    #                 if claimable_balance:
-    #                     new_hidden_log_vote_list.append(claimable_balance)
-    #             except ClaimableBalanceParsingError:
-    #                 logger.warning('Balance info skipped.', exc_info=sys.exc_info())
-    #     proposal.logvote_set.filter(hide=True).delete()
-    #     LogVote.objects.bulk_create(new_hidden_log_vote_list)
+    voted_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTED)
+    horizon_server = Server(settings.HORIZON_URL)
+
+    for proposal in voted_proposals:
+        new_hidden_log_vote_list = []
+        # TODO: Rollback asset filter after closing issue. https://github.com/stellar/go/issues/5199
+        request_builders = (
+            (
+                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
+                LogVote.VOTE_FOR,
+            ),
+            (
+                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
+                LogVote.VOTE_AGAINST,
+            ),
+        )
+        for request_builder in request_builders:
+            for balance in load_all_records(request_builder[0]):
+                try:
+                    claimable_balance = parse_log_vote_from_claimable_balance(balance, proposal, request_builder[1], hide=True)
+                    if claimable_balance:
+                        new_hidden_log_vote_list.append(claimable_balance)
+                except ClaimableBalanceParsingError:
+                    logger.warning('Balance info skipped.', exc_info=sys.exc_info())
+        proposal.logvote_set.filter(hide=True).delete()
+        LogVote.objects.bulk_create(new_hidden_log_vote_list)
 
 
 @celery_app.task(ignore_result=True)
