@@ -256,7 +256,6 @@ def _load_claimable_balance_from_operations(horizon_server: Server, log_vote: Lo
                 original_amount=amount,
                 account_issuer=log_vote.account_issuer,
                 created_at=created_at,
-                last_update_at=log_vote.created_at,
                 transaction_link=log_vote.transaction_link,
                 asset_code=log_vote.asset_code,
                 hide=log_vote.hide,
