@@ -31,8 +31,7 @@ def task_update_proposal_status(proposal_id):
     if proposal.end_at <= timezone.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
         proposal.proposal_status = Proposal.VOTED
         proposal.save()
-        task_update_votes.delay(proposal_id, True)
-        _update_proposal_final_results(proposal_id)
+        task_update_proposal_results.delay(proposal.id, True)
 
 
 @celery_app.task(ignore_result=True)
@@ -44,8 +43,7 @@ def task_update_active_proposals():
     active_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTING, start_at__lte=now, end_at__gte=now)
 
     for proposal in active_proposals:
-        task_update_votes.delay(proposal.id)
-        _update_proposal_final_results(proposal.id)
+        task_update_proposal_results.delay(proposal.id)
 
 
 @celery_app.task(ignore_result=True)
@@ -57,6 +55,10 @@ def task_check_expired_proposals():
     proposals = Proposal.objects.filter(proposal_status=Proposal.DISCUSSION, last_updated_at__lte=expired_period)
     proposals.update(proposal_status=Proposal.EXPIRED)
 
+@celery_app.task(ignore_result=True)
+def task_update_proposal_results(proposal_id: Optional[int] = None, freezing_amount: bool = False):
+    task_update_votes(proposal_id, freezing_amount)
+    _update_proposal_final_results(proposal_id)
 
 @celery_app.task(ignore_result=True)
 def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool = False):
