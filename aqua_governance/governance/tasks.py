@@ -180,9 +180,10 @@ def _load_and_enrichment_votes():
             delete_log_vote_id_list.append(log_vote.id)
         end = time.perf_counter()
 
-        logger.info(
-            f"{index + 1}/{count_log_votes} Indexing log_vote: {log_vote.id}, proposal_id: {log_vote.proposal_id}, time: {end - start:.6f}"
-        )
+        if index % 100 == 0:
+            logger.info(
+                f"{index + 1}/{count_log_votes} Indexing log_vote: {log_vote.id}, proposal_id: {log_vote.proposal_id}, time: {end - start:.6f}"
+            )
     logger.info("Finish indexing log_votes.")
     logger.info(f"Not handled votes: {not_handled_votes_count}")
 
