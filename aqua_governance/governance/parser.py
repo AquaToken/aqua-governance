@@ -1,4 +1,3 @@
-import hashlib
 from datetime import timedelta
 
 from dateutil.parser import parse as date_parse
@@ -72,8 +71,7 @@ def generate_vote_key(claimable_balance: dict, proposal: Proposal, vote_choice: 
 
 def generate_vote_key_by_raw_data(proposal_id: int, vote_choice: str, account_issuer: str, asset: str,
                                   time_list: list[str]) -> str:
-    payload = f"{proposal_id}|{vote_choice}|{account_issuer}|{asset}|{sorted(time_list)}"
-    return hashlib.sha256(payload.encode()).hexdigest()
+    return f"{proposal_id}|{vote_choice}|{account_issuer}|{asset}|{sorted(time_list)}"
 
 
 def _make_time_list_and_account_issuer_for_vote(claimable_balance: dict, proposal: Proposal) -> tuple[list[str], str]:
