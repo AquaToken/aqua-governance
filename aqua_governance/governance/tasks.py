@@ -19,55 +19,8 @@ from aqua_governance.taskapp import app as celery_app
 from aqua_governance.utils.requests import load_all_records
 from aqua_governance.utils.signals import DisableSignals
 
-# from aqua_governance.utils.stellar.asset import parse_asset_string
 
 logger = logging.getLogger()
-
-
-# TODO: old code
-# def _parse_claimable_balance(claimable_balance: dict, proposal: Proposal, log_vote: str) -> Optional[LogVote]:
-#     AQUA_ASSET = Asset(settings.AQUA_ASSET_CODE, settings.AQUA_ASSET_ISSUER)
-#
-#     balance_id = claimable_balance['id']
-#     asset = parse_asset_string(claimable_balance['asset'])
-#     if asset == AQUA_ASSET and LogVote.objects.filter(claimable_balance_id=balance_id).exists():
-#         return
-#
-#     try:
-#         return parse_balance_info(claimable_balance, proposal, log_vote)
-#     except ClaimableBalanceParsingError:
-#         logger.warning('Balance info skipped.', exc_info=sys.exc_info())
-
-# TODO: old code
-# @celery_app.task(ignore_result=True)
-# def task_update_proposal_result(proposal_id):
-#     horizon_server = Server(settings.HORIZON_URL)
-#     proposal = Proposal.objects.get(id=proposal_id)
-#     new_log_vote_list = []
-#
-#     # TODO: Rollback asset filter after closing issue. https://github.com/stellar/go/issues/5199
-#     request_builders = (
-#         (
-#             horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
-#             LogVote.VOTE_FOR,
-#         ),
-#         (
-#             horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
-#             LogVote.VOTE_AGAINST,
-#         ),
-#     )
-#
-#     for request_builder in request_builders:
-#         for balance in load_all_records(request_builder[0]):
-#             claimable_balance = _parse_claimable_balance(balance, proposal, request_builder[1])
-#             if claimable_balance:
-#                 new_log_vote_list.append(claimable_balance)
-#
-#     proposal.logvote_set.filter(asset_code=settings.GOVERNANCE_ICE_ASSET_CODE, hide=False).delete()
-#     proposal.logvote_set.filter(asset_code=settings.GDICE_ASSET_CODE, hide=False).delete()
-#     LogVote.objects.bulk_create(new_log_vote_list)
-#     _update_proposal_final_results(proposal_id)
-
 
 @celery_app.task(ignore_result=True)
 def task_update_proposal_status(proposal_id):
