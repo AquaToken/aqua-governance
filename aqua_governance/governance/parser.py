@@ -76,11 +76,6 @@ def generate_vote_key_by_raw_data(proposal_id: int, vote_choice: str, account_is
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def quant_percent(value, percent_step):
-    step = value * (percent_step / 100)
-    return round(value / step) * step
-
-
 def _make_time_list_and_account_issuer_for_vote(claimable_balance: dict, proposal: Proposal) -> tuple[list[str], str]:
     asset = parse_asset_string(claimable_balance['asset'])
     account_issuer = claimable_balance['account_issuer']
