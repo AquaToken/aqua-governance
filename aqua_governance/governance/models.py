@@ -213,7 +213,7 @@ class LogVote(models.Model):
     asset_code = models.CharField(max_length=15, choices=ASSET_TYPES, default=settings.AQUA_ASSET_CODE)
     created_at = models.DateTimeField(default=None, null=True)
     key = models.CharField(
-        max_length=66,
+        max_length=170,
         null=True,
         help_text=(
             ""
