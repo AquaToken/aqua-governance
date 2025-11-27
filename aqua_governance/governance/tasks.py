@@ -108,11 +108,14 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
         for vote_key, raw_vote_group in raw_vote_groups.items():
             raw_vote_group.sort(key=lambda item: Decimal(item[1]['amount']), reverse=True)
 
-            votes = all_votes.filter(key=vote_key)
+            votes = list(all_votes.filter(key=vote_key))
             for vote_group_index, (vote_choice, raw_vote) in enumerate(raw_vote_group):
-                vote = votes.filter(group_index=vote_group_index)
+                vote = None
+                for _vote in votes:
+                    if _vote.group_index == vote_group_index:
+                        vote = _vote
                 try:
-                    if vote.exists():
+                    if vote is not None:
                         update_vote = _make_updated_vote(vote.get(), vote_group_index, raw_vote, freezing_amount)
                         if update_vote:
                             update_log_vote.append(update_vote)
