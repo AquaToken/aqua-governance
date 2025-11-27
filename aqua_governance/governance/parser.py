@@ -19,7 +19,7 @@ def parse_log_vote_from_claimable_balance(claimable_balance: dict, proposal: Pro
     asset = parse_asset_string(claimable_balance['asset'])
     asset_code = claimable_balance['asset'].split(':')[0]
     amount = claimable_balance['amount']
-    account_issuer = claimable_balance['account_issuer']
+    account_issuer = claimable_balance['sponsor']
     last_modified_time = claimable_balance['last_modified_time']
     transaction_link = claimable_balance['_links']['transactions']['href'].replace('{?cursor,limit,order}', '')
 
