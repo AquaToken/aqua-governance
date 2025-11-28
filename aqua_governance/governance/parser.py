@@ -1,4 +1,5 @@
 from datetime import timedelta
+from typing import Optional
 
 from dateutil.parser import parse as date_parse
 from django.conf import settings
@@ -13,47 +14,42 @@ ICE_ASSET = Asset(settings.GOVERNANCE_ICE_ASSET_CODE, settings.GOVERNANCE_ICE_AS
 GDICE_ASSET = Asset(settings.GDICE_ASSET_CODE, settings.GDICE_ASSET_ISSUER)
 
 
-def parse_log_vote_from_claimable_balance(claimable_balance: dict, proposal: Proposal, vote_choice: str, hide=False):
+def parse_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, proposal: Proposal, vote_choice: str,
+               created_at: str, original_amount: str, vote_id: Optional[int], freezing_amount: bool = False) -> \
+Optional[LogVote]:
     balance_id = claimable_balance['id']
     asset = parse_asset_string(claimable_balance['asset'])
     asset_code = claimable_balance['asset'].split(':')[0]
     amount = claimable_balance['amount']
-    account_issuer = claimable_balance['sponsor']
-    last_modified_time = claimable_balance['last_modified_time']
     transaction_link = claimable_balance['_links']['transactions']['href'].replace('{?cursor,limit,order}', '')
-
-    claimants = claimable_balance['claimants']
 
     if asset not in [AQUA_ASSET, ICE_ASSET, GDICE_ASSET]:
         return None
 
-    if last_modified_time is None:
-        last_modified_time = str(proposal.created_at)
-
-    time_list = []
-    for claimant in claimants:
-        abs_before = claimant.get('predicate', None).get('not', None).get('abs_before', None)
-        if asset == AQUA_ASSET and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(
-            seconds=1) + 2 * (date_parse(last_modified_time) - timedelta(minutes=15) - proposal.start_at):
-            time_list.append(abs_before)
-        elif asset in [ICE_ASSET, GDICE_ASSET] and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(
-            seconds=1):
-            account_issuer = claimant['destination']
-            time_list.append(abs_before)
+    time_list, account_issuer = _make_time_list_and_account_issuer_for_vote(claimable_balance, proposal)
     if not time_list:
         return None
 
+    voted_amount = None
+    if freezing_amount:
+        voted_amount = amount
+
     return LogVote(
+        id=vote_id,
+        key=vote_key,
+        group_index=vote_group_index,
         claimable_balance_id=balance_id,
         proposal=proposal,
         vote_choice=vote_choice,
         amount=amount,
+        original_amount=original_amount,
+        voted_amount=voted_amount,
         account_issuer=account_issuer,
-        created_at=last_modified_time,
+        created_at=created_at,
         transaction_link=transaction_link,
         asset_code=asset_code,
-        hide=hide,
-        claimed=False,
+        hide=False,
+        claimed=False
     )
 
 
@@ -75,23 +71,15 @@ def generate_vote_key_by_raw_data(proposal_id: int, vote_choice: str, account_is
 
 
 def _make_time_list_and_account_issuer_for_vote(claimable_balance: dict, proposal: Proposal) -> tuple[list[str], str]:
-    asset = parse_asset_string(claimable_balance['asset'])
-    account_issuer = claimable_balance['account_issuer']
-    last_modified_time = claimable_balance['last_modified_time']
+    account_issuer = claimable_balance['sponsor']
     claimants: list = claimable_balance['claimants']
     time_list: list[str] = []
 
-    if last_modified_time is None:
-        last_modified_time = str(proposal.created_at)
-
     for claimant in claimants:
-        abs_before = claimant.get('predicate', {}).get('not', {}).get('abs_before', None)
-        if asset == AQUA_ASSET and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(
-            seconds=1) + 2 * (date_parse(last_modified_time) - timedelta(minutes=15) - proposal.start_at):
-            time_list.append(abs_before)
-        elif asset in [ICE_ASSET, GDICE_ASSET] and abs_before and date_parse(abs_before) >= proposal.end_at - timedelta(
-            seconds=1):
-            account_issuer = claimant['destination']
+        abs_before: Optional[str] = claimant.get('predicate', {}).get('not', {}).get('abs_before', None)
+        destination = claimant.get('destination', None)
+        if abs_before is not None and destination is not None:
+            account_issuer = destination
             time_list.append(abs_before)
 
     return time_list, account_issuer

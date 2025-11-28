@@ -1,40 +1,205 @@
 import logging
 import sys
-import time
 from datetime import datetime, timedelta
-from typing import Optional
+from decimal import Decimal
+from typing import Optional, Any
 
 from dateutil.parser import parse as date_parse
 import requests
 from django.conf import settings
 from django.utils import timezone
 
-from stellar_sdk import Asset, Server
-from stellar_sdk.exceptions import BaseHorizonError, BadRequestError
+from stellar_sdk import Server
+from stellar_sdk.exceptions import NotFoundError
 
 from aqua_governance.governance.exceptions import ClaimableBalanceParsingError, GenerateGrouKeyException
 from aqua_governance.governance.models import LogVote, Proposal
-from aqua_governance.governance.parser import parse_log_vote_from_claimable_balance, generate_vote_key_by_raw_data
+from aqua_governance.governance.parser import generate_vote_key, parse_vote
 from aqua_governance.taskapp import app as celery_app
 from aqua_governance.utils.requests import load_all_records
 from aqua_governance.utils.signals import DisableSignals
-from aqua_governance.utils.stellar.asset import parse_asset_string
+
 
 logger = logging.getLogger()
 
+@celery_app.task(ignore_result=True)
+def task_update_proposal_status(proposal_id):
+    """
+    Update proposal status, votes and results before the end of voting
+    """
+    proposal = Proposal.objects.get(id=proposal_id)
+    if proposal.end_at <= timezone.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
+        proposal.proposal_status = Proposal.VOTED
+        proposal.save()
+        task_update_proposal_results.delay(proposal.id, True)
 
-def _parse_claimable_balance(claimable_balance: dict, proposal: Proposal, log_vote: str) -> Optional[LogVote]:
-    AQUA_ASSET = Asset(settings.AQUA_ASSET_CODE, settings.AQUA_ASSET_ISSUER)
 
+@celery_app.task(ignore_result=True)
+def task_update_active_proposals():
+    """
+    Update active proposals
+    """
+    now = datetime.now()
+    active_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTING, start_at__lte=now, end_at__gte=now)
+
+    for proposal in active_proposals:
+        task_update_proposal_results.delay(proposal.id)
+
+
+@celery_app.task(ignore_result=True)
+def task_check_expired_proposals():
+    """
+    Check expired proposals
+    """
+    expired_period = datetime.now() - settings.EXPIRED_TIME
+    proposals = Proposal.objects.filter(proposal_status=Proposal.DISCUSSION, last_updated_at__lte=expired_period)
+    proposals.update(proposal_status=Proposal.EXPIRED)
+
+@celery_app.task(ignore_result=True)
+def task_update_proposal_results(proposal_id: Optional[int] = None, freezing_amount: bool = False):
+    task_update_votes(proposal_id, freezing_amount)
+    _update_proposal_final_results(proposal_id)
+
+@celery_app.task(ignore_result=True)
+def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool = False):
+    """
+    Update votes for proposal
+    """
+    if proposal_id is None:
+        proposals = Proposal.objects.filter(proposal_status__in=[Proposal.VOTED]).order_by("-id")
+    else:
+        proposals = Proposal.objects.filter(id=proposal_id)
+
+    horizon_server = Server(settings.HORIZON_URL)
+
+    for proposal in proposals:
+        request_builders = (
+            (
+                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
+                LogVote.VOTE_FOR,
+            ),
+            (
+                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
+                LogVote.VOTE_AGAINST,
+            ),
+        )
+
+        all_votes = proposal.logvote_set.all()
+        raw_vote_groups: dict[str, list[tuple[str, dict[str, Any]]]] = dict()
+        new_log_vote: list[LogVote] = []
+        claimed_log_vote: list[LogVote] = []
+        update_log_vote: list[LogVote] = []
+        indexed_vote_keys_and_index: list[tuple[str, int]] = []
+
+        # Making claimable balances groups by vote_key
+        for request_builder in request_builders:
+            for balance in load_all_records(request_builder[0]):
+                try:
+                    vote_key = generate_vote_key(balance, proposal, request_builder[1])
+                    raw_vote_group = raw_vote_groups.get(vote_key, [])
+                    raw_vote_group.append((request_builder[1], balance))
+                    raw_vote_groups.update({vote_key: raw_vote_group})
+                except GenerateGrouKeyException:
+                    logger.warning('Error generating vote_key', exc_info=sys.exc_info())
+
+        logger.info(f"Proposal {proposal.id} has {len(raw_vote_groups)} vote groups")
+
+        # Sorting raw_vote_group and parse new votes or update old votes
+        for vote_key, raw_vote_group in raw_vote_groups.items():
+            raw_vote_group.sort(key=lambda item: Decimal(item[1]['amount']), reverse=True)
+
+            votes = list(all_votes.filter(key=vote_key))
+            for vote_group_index, (vote_choice, raw_vote) in enumerate(raw_vote_group):
+                vote = None
+                for _vote in votes:
+                    if _vote.group_index == vote_group_index:
+                        vote = _vote
+                try:
+                    if vote is not None:
+                        update_vote = _make_updated_vote(vote.get(), vote_group_index, raw_vote, freezing_amount)
+                        if update_vote:
+                            update_log_vote.append(update_vote)
+                            indexed_vote_keys_and_index.append((vote_key, vote_group_index))
+                        else:
+                            logger.warning(f'Error updating vote for {vote_key}, {vote_group_index}')
+                    else:
+                        new_vote = _make_new_vote(vote_key, vote_group_index, raw_vote, proposal, vote_choice,
+                                                  freezing_amount)
+                        if new_vote:
+                            new_log_vote.append(new_vote)
+                            indexed_vote_keys_and_index.append((vote_key, vote_group_index))
+                        else:
+                            logger.warning(f'Error create vote for {vote_key}, {vote_group_index}')
+                except ClaimableBalanceParsingError:
+                    logger.warning('Balance info skipped.', exc_info=sys.exc_info())
+
+        # Hiding old voices that are in the database but have not loaded
+        for vote in all_votes:
+            if (vote.key, vote.group_index) not in indexed_vote_keys_and_index:
+                vote.claimed = True
+                claimed_log_vote.append(vote)
+
+        LogVote.objects.bulk_create(new_log_vote)
+        LogVote.objects.bulk_update(update_log_vote,
+                                    ["claimable_balance_id", "amount", "voted_amount", "transaction_link", "claimed"])
+        LogVote.objects.bulk_update(claimed_log_vote, ["claimed"])
+
+
+@celery_app.task(ignore_result=True)
+def check_proposals_with_bad_horizon_error():
+    failed_proposals = Proposal.objects.filter(hide=False, payment_status=Proposal.HORIZON_ERROR)
+    for proposal in failed_proposals:
+        proposal.check_transaction()
+
+
+def _make_new_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, proposal: Proposal, vote_choice: str,
+                   freezing_amount: bool):
     balance_id = claimable_balance['id']
-    asset = parse_asset_string(claimable_balance['asset'])
-    if asset == AQUA_ASSET and LogVote.objects.filter(claimable_balance_id=balance_id).exists():
-        return
+    original_amount = ""
+    created_at = ""
+    horizon_server = Server(settings.HORIZON_URL)
 
     try:
-        return parse_log_vote_from_claimable_balance(claimable_balance, proposal, log_vote)
-    except ClaimableBalanceParsingError:
-        logger.warning('Balance info skipped.', exc_info=sys.exc_info())
+        ops = horizon_server.operations().for_claimable_balance(balance_id).order(desc=False).limit(50).call()
+        for record in ops["_embedded"]["records"]:
+            if record['type'] == 'create_claimable_balance':
+                created_at = str(date_parse(record["created_at"]))
+                original_amount = str(record["amount"])
+    except NotFoundError:
+        original_amount = claimable_balance['amount']
+        created_at = claimable_balance['last_modified_time']
+
+    if created_at is None:
+        created_at = str(proposal.created_at)
+
+    return parse_vote(
+        vote_key=vote_key,
+        vote_group_index=vote_group_index,
+        claimable_balance=claimable_balance,
+        proposal=proposal,
+        vote_choice=vote_choice,
+        created_at=created_at,
+        original_amount=original_amount,
+        vote_id=None,
+        freezing_amount=freezing_amount
+    )
+
+
+def _make_updated_vote(vote: LogVote, vote_group_index: int, claimable_balance: dict, freezing_amount: bool):
+    created_at = str(vote.created_at)
+    original_amount = str(vote.original_amount)
+
+    return parse_vote(
+        vote_key=vote.key,
+        vote_group_index=vote_group_index,
+        claimable_balance=claimable_balance,
+        proposal=vote.proposal,
+        vote_choice=vote.vote_choice,
+        created_at=created_at,
+        original_amount=original_amount,
+        vote_id=vote.id,
+        freezing_amount=freezing_amount
+    )
 
 
 def _update_proposal_final_results(proposal_id):
@@ -58,226 +223,3 @@ def _update_proposal_final_results(proposal_id):
     with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
         proposal.save(update_fields=['vote_for_result', 'vote_against_result', 'aqua_circulating_supply',
                                      'ice_circulating_supply'])
-
-
-@celery_app.task(ignore_result=True)
-def task_update_proposal_result(proposal_id):
-    horizon_server = Server(settings.HORIZON_URL)
-    proposal = Proposal.objects.get(id=proposal_id)
-    new_log_vote_list = []
-
-    # TODO: Rollback asset filter after closing issue. https://github.com/stellar/go/issues/5199
-    request_builders = (
-        (
-            horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
-            LogVote.VOTE_FOR,
-        ),
-        (
-            horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
-            LogVote.VOTE_AGAINST,
-        ),
-    )
-
-    for request_builder in request_builders:
-        for balance in load_all_records(request_builder[0]):
-            claimable_balance = _parse_claimable_balance(balance, proposal, request_builder[1])
-            if claimable_balance:
-                new_log_vote_list.append(claimable_balance)
-
-    proposal.logvote_set.filter(asset_code=settings.GOVERNANCE_ICE_ASSET_CODE, hide=False).delete()
-    proposal.logvote_set.filter(asset_code=settings.GDICE_ASSET_CODE, hide=False).delete()
-    LogVote.objects.bulk_create(new_log_vote_list)
-    _update_proposal_final_results(proposal_id)
-
-
-@celery_app.task(ignore_result=True)
-def task_update_proposal_status(proposal_id):
-    proposal = Proposal.objects.get(id=proposal_id)
-    if proposal.end_at <= timezone.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
-        proposal.proposal_status = Proposal.VOTED
-        proposal.save()
-        task_update_proposal_result.delay(proposal_id)
-
-
-@celery_app.task(ignore_result=True)
-def task_update_active_proposals():
-    now = datetime.now()
-    active_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTING, start_at__lte=now, end_at__gte=now)
-
-    for proposal in active_proposals:
-        task_update_proposal_result.delay(proposal.id)
-
-
-@celery_app.task(ignore_result=True)
-def task_check_expired_proposals():
-    expired_period = datetime.now() - settings.EXPIRED_TIME
-    proposals = Proposal.objects.filter(proposal_status=Proposal.DISCUSSION, last_updated_at__lte=expired_period)
-    proposals.update(proposal_status=Proposal.EXPIRED)
-
-
-@celery_app.task(ignore_result=True)
-def task_update_hidden_ice_votes_in_voted_proposals():
-    voted_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTED)
-    horizon_server = Server(settings.HORIZON_URL)
-
-    for proposal in voted_proposals:
-        new_hidden_log_vote_list = []
-        # TODO: Rollback asset filter after closing issue. https://github.com/stellar/go/issues/5199
-        request_builders = (
-            (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
-                LogVote.VOTE_FOR,
-            ),
-            (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
-                LogVote.VOTE_AGAINST,
-            ),
-        )
-        for request_builder in request_builders:
-            for balance in load_all_records(request_builder[0]):
-                try:
-                    claimable_balance = parse_log_vote_from_claimable_balance(balance, proposal, request_builder[1], hide=True)
-                    if claimable_balance:
-                        new_hidden_log_vote_list.append(claimable_balance)
-                except ClaimableBalanceParsingError:
-                    logger.warning('Balance info skipped.', exc_info=sys.exc_info())
-        proposal.logvote_set.filter(hide=True).delete()
-        LogVote.objects.bulk_create(new_hidden_log_vote_list)
-
-
-@celery_app.task(ignore_result=True)
-def check_proposals_with_bad_horizon_error():
-    failed_proposals = Proposal.objects.filter(hide=False, payment_status=Proposal.HORIZON_ERROR)
-    for proposal in failed_proposals:
-        proposal.check_transaction()
-
-
-@celery_app.task(ignore_result=True)
-def update_all_log_votes():
-    _load_and_enrichment_votes()
-    _normalize_vote_group_index()
-
-
-def _load_and_enrichment_votes():
-    horizon_server = Server(settings.HORIZON_URL)
-    log_votes = LogVote.objects.filter(hide=False).order_by("-proposal_id")
-    count_log_votes = len(log_votes)
-
-    new_log_vote_list = []
-    update_log_vote_list = []
-    delete_log_vote_id_list = []
-    not_handled_votes_count = 0
-
-    for index, log_vote in enumerate(log_votes):
-        start = time.perf_counter()
-        new_log_vote = _load_claimable_balance_from_operations(horizon_server, log_vote)
-        if new_log_vote is None:
-            log_vote.claimed = True
-            update_log_vote_list.append(log_vote)
-            not_handled_votes_count += 1
-        else:
-            new_log_vote_list.append(new_log_vote)
-            delete_log_vote_id_list.append(log_vote.id)
-        end = time.perf_counter()
-
-        if index % 100 == 0:
-            logger.warning(
-                f"{index + 1}/{count_log_votes} Indexing log_vote: {log_vote.id}, proposal_id: {log_vote.proposal_id}, time: {end - start:.6f}"
-            )
-    logger.warning("Finish indexing log_votes.")
-    logger.warning(f"Not handled votes: {not_handled_votes_count}")
-
-    LogVote.objects.filter(id__in=delete_log_vote_id_list).delete()
-    LogVote.objects.bulk_create(new_log_vote_list)
-    LogVote.objects.bulk_update(update_log_vote_list, ["claimed"])
-
-
-def _normalize_vote_group_index():
-    logger.warning("Normalizing log_vote_group_index.")
-    log_votes = LogVote.objects.filter(key__isnull=False).order_by("-proposal_id")
-    count_log_votes = len(log_votes)
-
-    for vote_index, vote in enumerate(log_votes):
-        start = time.perf_counter()
-        if vote.group_index > 0:
-            continue
-        any_votes = list(LogVote.objects.exclude(id=vote.id).filter(hide=False, key=vote.key))
-        if not any_votes:
-            continue
-
-        filtered_any_votes = [x for x in any_votes if x.original_amount is not None]
-        sorted_vote_group = sorted([vote, *filtered_any_votes], key=lambda x: x.original_amount, reverse=True)
-        for index, _vote in enumerate(sorted_vote_group):
-            _vote.group_index = index
-
-        LogVote.objects.bulk_update(sorted_vote_group, ["group_index"])
-        end = time.perf_counter()
-        logger.warning(
-            f"{vote_index + 1}/{count_log_votes} Normalize log_vote: {vote.id}, proposal_id: {vote.proposal_id}, time: {end - start:.6f}"
-        )
-    logger.warning("Normalizing log_vote_group_index finished.")
-
-
-def _load_claimable_balance_from_operations(horizon_server: Server, log_vote: LogVote) -> Optional[LogVote]:
-    vote_claimed = False
-    new_log_vote: Optional[LogVote] = None
-
-    try:
-        operations = horizon_server.operations().for_claimable_balance(log_vote.claimable_balance_id).call()
-        records = operations["_embedded"]["records"]
-        for record in records:
-            if record['type'] == 'claim_claimable_balance' or record['type'] == 'clawback_claimable_balance':
-                vote_claimed = True
-            if record['type'] != 'create_claimable_balance':
-                continue
-
-            time_list = []
-            for claimant in record['claimants']:
-                abs_before = claimant.get('predicate', {}).get('not', {}).get('abs_before', None)
-                if abs_before is not None:
-                    time_list.append(abs_before)
-
-            if not time_list:
-                return None
-
-            created_at = date_parse(record['created_at'])
-            amount = record['amount']
-            key = generate_vote_key_by_raw_data(
-                log_vote.proposal_id,
-                log_vote.vote_choice,
-                log_vote.account_issuer,
-                log_vote.asset_code,
-                time_list
-            )
-
-            new_log_vote = LogVote(
-                group_index=0,
-                key=key,
-                id=log_vote.id,
-                claimable_balance_id=log_vote.claimable_balance_id,
-                proposal=log_vote.proposal,
-                vote_choice=log_vote.vote_choice,
-                amount=log_vote.amount,
-                original_amount=amount,
-                account_issuer=log_vote.account_issuer,
-                created_at=created_at,
-                transaction_link=log_vote.transaction_link,
-                asset_code=log_vote.asset_code,
-                hide=log_vote.hide,
-                claimed=vote_claimed,
-            )
-    except BadRequestError as e:
-        if e.status == 429:
-            logger.warning(f"BadRequestError 429: {log_vote.id} {log_vote.claimable_balance_id}")
-            time.sleep(60)
-            return _load_claimable_balance_from_operations(horizon_server, log_vote)
-        logger.warning(f"BadRequestError: ")
-    except BaseHorizonError:
-        logger.warning(f"BaseHorizonError: Claimable Balance Load Error: {log_vote.id} {log_vote.claimable_balance_id}", exc_info=sys.exc_info())
-    except GenerateGrouKeyException:
-        logger.warning(f"Generate Group Key Error: {log_vote.id}", exc_info=sys.exc_info())
-
-    if vote_claimed and new_log_vote is not None:
-        new_log_vote.claimed = vote_claimed
-
-    return new_log_vote

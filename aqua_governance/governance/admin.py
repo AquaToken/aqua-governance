@@ -55,7 +55,7 @@ class LogVoteAdmin(admin.ModelAdmin):
         'asset_code',
         'claimable_balance_id', 'transaction_link', 'account_issuer', 'amount', 'proposal', 'vote_choice', 'created_at',
     ]
-    list_filter = ('vote_choice', )
+    list_filter = ('vote_choice', 'claimed')
 
     def has_change_permission(self, request, obj=None):
         return False
