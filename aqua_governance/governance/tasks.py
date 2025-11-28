@@ -116,7 +116,7 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
                         vote = _vote
                 try:
                     if vote is not None:
-                        update_vote = _make_updated_vote(vote.get(), vote_group_index, raw_vote, freezing_amount)
+                        update_vote = _make_updated_vote(vote, vote_group_index, raw_vote, freezing_amount)
                         if update_vote:
                             update_log_vote.append(update_vote)
                             indexed_vote_keys_and_index.append((vote_key, vote_group_index))
