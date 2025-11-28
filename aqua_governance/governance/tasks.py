@@ -7,6 +7,7 @@ from typing import Optional, Any
 from dateutil.parser import parse as date_parse
 import requests
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 
 from stellar_sdk import Server
@@ -125,7 +126,12 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
                     else:
                         new_vote = _make_new_vote(vote_key, vote_group_index, raw_vote, proposal, vote_choice,
                                                   freezing_amount)
-                        if new_vote:
+                        old_vote = all_votes.filter(hide=False, claimable_balance_id=new_vote.claimable_balance_id).first()
+                        if old_vote is not None:
+                            update_vote = _make_updated_vote(old_vote, vote_group_index, raw_vote, freezing_amount)
+                            update_log_vote.append(update_vote)
+                            indexed_vote_keys_and_index.append((vote_key, vote_group_index))
+                        elif new_vote:
                             new_log_vote.append(new_vote)
                             indexed_vote_keys_and_index.append((vote_key, vote_group_index))
                         else:
