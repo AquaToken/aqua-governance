@@ -10,7 +10,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from stellar_sdk import Asset, Server
-from stellar_sdk.exceptions import BaseHorizonError
+from stellar_sdk.exceptions import BaseHorizonError, BadRequestError
 
 from aqua_governance.governance.exceptions import ClaimableBalanceParsingError, GenerateGrouKeyException
 from aqua_governance.governance.models import LogVote, Proposal
@@ -181,11 +181,11 @@ def _load_and_enrichment_votes():
         end = time.perf_counter()
 
         if index % 100 == 0:
-            logger.info(
+            logger.warning(
                 f"{index + 1}/{count_log_votes} Indexing log_vote: {log_vote.id}, proposal_id: {log_vote.proposal_id}, time: {end - start:.6f}"
             )
-    logger.info("Finish indexing log_votes.")
-    logger.info(f"Not handled votes: {not_handled_votes_count}")
+    logger.warning("Finish indexing log_votes.")
+    logger.warning(f"Not handled votes: {not_handled_votes_count}")
 
     LogVote.objects.filter(id__in=delete_log_vote_id_list).delete()
     LogVote.objects.bulk_create(new_log_vote_list)
@@ -193,7 +193,7 @@ def _load_and_enrichment_votes():
 
 
 def _normalize_vote_group_index():
-    logger.info("Normalizing log_vote_group_index.")
+    logger.warning("Normalizing log_vote_group_index.")
     log_votes = LogVote.objects.filter(key__isnull=False).order_by("-proposal_id")
     count_log_votes = len(log_votes)
 
@@ -212,10 +212,10 @@ def _normalize_vote_group_index():
 
         LogVote.objects.bulk_update(sorted_vote_group, ["group_index"])
         end = time.perf_counter()
-        logger.info(
+        logger.warning(
             f"{vote_index + 1}/{count_log_votes} Normalize log_vote: {vote.id}, proposal_id: {vote.proposal_id}, time: {end - start:.6f}"
         )
-    logger.info("Normalizing log_vote_group_index finished.")
+    logger.warning("Normalizing log_vote_group_index finished.")
 
 
 def _load_claimable_balance_from_operations(horizon_server: Server, log_vote: LogVote) -> Optional[LogVote]:
@@ -266,8 +266,14 @@ def _load_claimable_balance_from_operations(horizon_server: Server, log_vote: Lo
                 hide=log_vote.hide,
                 claimed=vote_claimed,
             )
+    except BadRequestError as e:
+        if e.status == 429:
+            logger.warning(f"BadRequestError 429: {log_vote.id} {log_vote.claimable_balance_id}")
+            time.sleep(60)
+            return _load_claimable_balance_from_operations(horizon_server, log_vote)
+        logger.warning(f"BadRequestError: ")
     except BaseHorizonError:
-        logger.warning(f"Claimable Balance Load Error: {log_vote.id} {log_vote.claimable_balance_id}", exc_info=sys.exc_info())
+        logger.warning(f"BaseHorizonError: Claimable Balance Load Error: {log_vote.id} {log_vote.claimable_balance_id}", exc_info=sys.exc_info())
     except GenerateGrouKeyException:
         logger.warning(f"Generate Group Key Error: {log_vote.id}", exc_info=sys.exc_info())
 
