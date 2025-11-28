@@ -208,12 +208,56 @@ class LogVote(models.Model):
     claimable_balance_id = models.CharField(max_length=72, null=True)
     transaction_link = models.URLField(null=True)
     account_issuer = models.CharField(max_length=56, null=True)
-    amount = models.DecimalField(decimal_places=7, max_digits=20, blank=True, null=True)
     proposal = models.ForeignKey(Proposal, on_delete=models.CASCADE, null=True)
     vote_choice = models.CharField(max_length=15, choices=VOTE_TYPES, default=None, null=True)
-    created_at = models.DateTimeField(default=None, null=True)
     asset_code = models.CharField(max_length=15, choices=ASSET_TYPES, default=settings.AQUA_ASSET_CODE)
-    time_list = ArrayField(models.DateTimeField(default=None, null=True), default=list)
+    created_at = models.DateTimeField(default=None, null=True)
+    key = models.CharField(
+        max_length=170,
+        null=True,
+        help_text=(
+            ""
+        )
+    )
+    group_index = models.IntegerField(
+        default=0,
+        help_text=(
+            ""
+        )
+    )
+    amount = models.DecimalField(
+        decimal_places=7,
+        max_digits=20,
+        blank=True,
+        null=True,
+        help_text=(
+            ""
+        )
+    )
+    original_amount = models.DecimalField(
+        decimal_places=7,
+        max_digits=20,
+        blank=True,
+        null=True,
+        help_text=(
+            ""
+        )
+    )
+    voted_amount = models.DecimalField(
+        decimal_places=7,
+        max_digits=20,
+        blank=True,
+        null=True,
+        help_text=(
+            ""
+        )
+    )
+    claimed = models.BooleanField(
+        default=False,
+        help_text=(
+            ""
+        )
+    )
     hide = models.BooleanField(
         default=False,
         help_text=(
