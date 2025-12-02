@@ -4,22 +4,6 @@ from rest_framework.filters import BaseFilterBackend
 from aqua_governance.governance.models import Proposal, LogVote
 
 
-class HideFilterBackend(BaseFilterBackend):  # TODO: remove it
-    def filter_queryset(self, request, queryset, view):
-        hide_value = request.query_params.get('hide')
-
-        if not hide_value or hide_value == 'false':
-            return queryset.filter(hide=False)
-
-        if hide_value == 'true':
-            return queryset.filter(hide=True)
-
-        if hide_value == 'all':
-            return queryset
-
-        return queryset.filter(hide=False)
-
-
 class ProposalStatusFilterBackend(BaseFilterBackend):
     def filter_queryset(self, request, queryset, view):
         status_value = request.query_params.get('status')
@@ -54,14 +38,13 @@ class ProposalVoteOwnerFilterBackend(BaseFilterBackend):
         public_key = request.query_params.get('vote_owner_public_key')
         claimed = not bool(request.query_params.get('active', False))
         if public_key:
-            return queryset.filter(logvote__account_issuer=public_key, logvote__claimed=claimed,
-                                   logvote__hide=False).distinct().prefetch_related(
+            return queryset.filter(logvote__account_issuer=public_key, logvote__claimed=claimed).distinct().prefetch_related(
                 Prefetch('logvote_set',
-                         LogVote.objects.filter(account_issuer=public_key, claimed=claimed, hide=False).order_by(
+                         LogVote.objects.filter(account_issuer=public_key, claimed=claimed).order_by(
                              '-created_at')),
             )
         return queryset.prefetch_related(
-            Prefetch('logvote_set', LogVote.objects.filter(claimed=claimed, hide=False).order_by('-created_at')),
+            Prefetch('logvote_set', LogVote.objects.filter(claimed=claimed).order_by('-created_at')),
         )
 
 

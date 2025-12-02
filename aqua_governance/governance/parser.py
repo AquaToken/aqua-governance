@@ -1,7 +1,5 @@
-from datetime import timedelta
 from typing import Optional
 
-from dateutil.parser import parse as date_parse
 from django.conf import settings
 from stellar_sdk import Asset
 
@@ -48,8 +46,7 @@ Optional[LogVote]:
         created_at=created_at,
         transaction_link=transaction_link,
         asset_code=asset_code,
-        hide=False,
-        claimed=False
+        claimed=False,
     )
 
 
