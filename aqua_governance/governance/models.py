@@ -2,7 +2,6 @@ from datetime import datetime
 
 import requests
 from django.conf import settings
-from django.contrib.postgres.fields import ArrayField
 from django.db import models
 
 from django_quill.fields import QuillField
@@ -216,13 +215,15 @@ class LogVote(models.Model):
         max_length=170,
         null=True,
         help_text=(
-            ""
+            "Unique vote key. Constructed from: proposal_id|vote_choice|account_issuer|asset|sorted(time_list). "
+            "Used to group related claimable balances into one logical vote group."
         )
     )
     group_index = models.IntegerField(
         default=0,
         help_text=(
-            ""
+            "Vote index within a group sharing the same key. The group is sorted by amount in descending order; "
+            "0 is the record with the largest amount."
         )
     )
     amount = models.DecimalField(
@@ -231,7 +232,7 @@ class LogVote(models.Model):
         blank=True,
         null=True,
         help_text=(
-            ""
+            "Current claimable balance amount fetched from Horizon at the time of the last synchronization."
         )
     )
     original_amount = models.DecimalField(
@@ -240,7 +241,7 @@ class LogVote(models.Model):
         blank=True,
         null=True,
         help_text=(
-            ""
+            "Original claimable balance amount from the create_claimable_balance operation (or from the balance record if the operation is unavailable)."
         )
     )
     voted_amount = models.DecimalField(
@@ -249,29 +250,17 @@ class LogVote(models.Model):
         blank=True,
         null=True,
         help_text=(
-            ""
+            "Amount counted in the vote tally during freezing. May be null if the vote has not been frozen yet."
         )
     )
     claimed = models.BooleanField(
         default=False,
         help_text=(
-            ""
+            "Indicates that the vote is no longer active (the balance is unavailable/not found during synchronization) and is excluded from the tally."
         )
     )
-    hide = models.BooleanField(
-        default=False,
-        help_text=(
-            "System managed soft exclusion for this vote. Use cases: votes parsed after proposal end; "
-            "duplicates reingested with the same claimable_balance_id; votes invalidated after rule changes or failed "
-            "reverification; spam or abuse detection; temporary suppression during reprocessing. When True, the vote "
-            "remains stored but is excluded from public endpoints and all counts or quorum. Automatically set by "
-            "parser or background tasks; not edited manually. Part of the composite uniqueness with claimable_balance_id "
-            "to allow a hidden shadow row without conflicts."
-        ),
-    )
-
     class Meta:
-        unique_together = [['hide', 'claimable_balance_id']]
+        pass
 
     def __str__(self):
         return str(self.id)
