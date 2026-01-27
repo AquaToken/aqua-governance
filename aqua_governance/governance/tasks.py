@@ -83,6 +83,10 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
                 horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
                 LogVote.VOTE_AGAINST,
             ),
+            (
+                horizon_server.claimable_balances().for_claimant(proposal.abstain_issuer).order(desc=False),
+                LogVote.VOTE_ABSTAIN,
+            ),
         )
 
         all_votes = proposal.logvote_set.all()
@@ -215,8 +219,12 @@ def _update_proposal_final_results(proposal_id):
     vote_against_result = sum(
         proposal.logvote_set.filter(vote_choice=LogVote.VOTE_AGAINST, hide=False).values_list('amount', flat=True),
     )
+    vote_abstain_result = sum(
+        proposal.logvote_set.filter(vote_choice=LogVote.VOTE_ABSTAIN, hide=False).values_list('amount', flat=True),
+    )
     proposal.vote_for_result = vote_for_result
     proposal.vote_against_result = vote_against_result
+    proposal.vote_abstain_result = vote_abstain_result
 
     response = requests.get(settings.AQUA_CIRCULATING_URL)
     if response.status_code == 200:
@@ -227,5 +235,5 @@ def _update_proposal_final_results(proposal_id):
         proposal.ice_circulating_supply = float(response.json()['ice_supply_amount'])
 
     with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-        proposal.save(update_fields=['vote_for_result', 'vote_against_result', 'aqua_circulating_supply',
-                                     'ice_circulating_supply'])
+        proposal.save(update_fields=['vote_for_result', 'vote_against_result', 'vote_abstain_result',
+                                     'aqua_circulating_supply', 'ice_circulating_supply'])

@@ -64,6 +64,7 @@ class Proposal(models.Model):
 
     vote_for_issuer = models.CharField(max_length=56)
     vote_against_issuer = models.CharField(max_length=56)
+    abstain_issuer = models.CharField(max_length=56, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     last_updated_at = models.DateTimeField(auto_now_add=True)
@@ -80,6 +81,7 @@ class Proposal(models.Model):
 
     vote_for_result = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True, null=True)
     vote_against_result = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True, null=True)
+    vote_abstain_result = models.DecimalField(decimal_places=7, max_digits=20, default=0, blank=True, null=True)
 
     transaction_hash = models.CharField(max_length=64, unique=True, null=True)
     envelope_xdr = models.TextField(null=True, blank=True)
@@ -180,6 +182,9 @@ class Proposal(models.Model):
         if not self.vote_for_issuer:
             keypair = Keypair.random()
             self.vote_for_issuer = keypair.public_key
+        if not self.abstain_issuer:
+            keypair = Keypair.random()
+            self.abstain_issuer = keypair.public_key
 
         if not self.pk:
             response = requests.get(settings.AQUA_CIRCULATING_URL)
@@ -195,9 +200,11 @@ class Proposal(models.Model):
 class LogVote(models.Model):
     VOTE_FOR = 'vote_for'
     VOTE_AGAINST = 'vote_against'
+    VOTE_ABSTAIN = 'vote_abstain'
     VOTE_TYPES = (
         (VOTE_FOR, 'Vote For'),
         (VOTE_AGAINST, 'Vote Against'),
+        (VOTE_ABSTAIN, 'Vote Abstain'),
     )
     ASSET_TYPES = (
         (settings.AQUA_ASSET_CODE, settings.AQUA_ASSET_CODE),

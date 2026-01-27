@@ -11,16 +11,16 @@ class ProposalAdmin(admin.ModelAdmin):
         'title', 'start_at', 'end_at', '_list_display_quorum',
     ]
     readonly_fields = [
-        'vote_for_issuer', 'vote_against_issuer', 'version',
-        'vote_for_result', 'vote_against_result', 'aqua_circulating_supply', 'ice_circulating_supply',
+        'vote_for_issuer', 'vote_against_issuer', 'abstain_issuer', 'version',
+        'vote_for_result', 'vote_against_result', 'vote_abstain_result', 'aqua_circulating_supply', 'ice_circulating_supply',
         'payment_status',
     ]
     search_fields = ['proposed_by']
     fields = [
-        'proposed_by', 'title', 'text', 'vote_for_issuer', 'vote_against_issuer',
+        'proposed_by', 'title', 'text', 'vote_for_issuer', 'vote_against_issuer', 'abstain_issuer',
         'proposal_status', 'payment_status', 'version', 'start_at', 'end_at', 'hide',
-        'vote_for_result', 'vote_against_result', 'aqua_circulating_supply', 'ice_circulating_supply',
-        'discord_channel_url', 'discord_channel_name', 'discord_username',
+        'vote_for_result', 'vote_against_result', 'vote_abstain_result', 'aqua_circulating_supply',
+        'ice_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
     ]
     list_filter = ('start_at', 'end_at')
     form = ProposalAdminForm
@@ -37,9 +37,11 @@ class ProposalAdmin(admin.ModelAdmin):
         return self.readonly_fields
 
     def _list_display_quorum(self, obj):
-        if obj.vote_for_result + obj.vote_against_result >= (float(obj.aqua_circulating_supply) + float(obj.ice_circulating_supply)) * obj.percent_for_quorum / 100:
+        if obj.vote_for_result + obj.vote_against_result + obj.vote_abstain_result >= (
+            float(obj.aqua_circulating_supply) + float(obj.ice_circulating_supply)) * obj.percent_for_quorum / 100:
             return 'Enough votes'
         return 'Not enough votes'
+
     _list_display_quorum.short_description = 'quorum'
 
 
@@ -50,7 +52,7 @@ class LogVoteAdmin(admin.ModelAdmin):
         'asset_code',
         'claimable_balance_id', 'transaction_link', 'account_issuer', 'amount', 'proposal', 'vote_choice', 'created_at',
     ]
-    search_fields = ['proposal__id', 'proposal__vote_for_issuer', 'proposal__vote_against_issuer']
+    search_fields = ['proposal__id', 'proposal__vote_for_issuer', 'proposal__vote_against_issuer', 'proposal__abstain_issuer']
     fields = [
         'asset_code',
         'claimable_balance_id', 'transaction_link', 'account_issuer', 'amount', 'proposal', 'vote_choice', 'created_at',

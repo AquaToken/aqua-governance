@@ -1,7 +1,5 @@
-from datetime import timedelta
 from typing import Optional
 
-from dateutil.parser import parse as date_parse
 from django.conf import settings
 from stellar_sdk import Asset
 
