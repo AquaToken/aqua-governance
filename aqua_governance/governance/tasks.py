@@ -83,11 +83,14 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
                 horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
                 LogVote.VOTE_AGAINST,
             ),
-            (
-                horizon_server.claimable_balances().for_claimant(proposal.abstain_issuer).order(desc=False),
-                LogVote.VOTE_ABSTAIN,
-            ),
         )
+        if proposal.abstain_issuer:
+            request_builders = request_builders + (
+                (
+                    horizon_server.claimable_balances().for_claimant(proposal.abstain_issuer).order(desc=False),
+                    LogVote.VOTE_ABSTAIN,
+                ),
+            )
 
         all_votes = proposal.logvote_set.all()
         raw_vote_groups: dict[str, list[tuple[str, dict[str, Any]]]] = dict()
