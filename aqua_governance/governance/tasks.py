@@ -217,21 +217,33 @@ def _make_updated_vote(vote: LogVote, vote_group_index: int, claimable_balance: 
 
 def _update_proposal_final_results(proposal_id):
     proposal = Proposal.objects.get(id=proposal_id)
+    supported_vote_assets = [settings.GOVERNANCE_ICE_ASSET_CODE, settings.GDICE_ASSET_CODE]
     vote_for_result = sum(
-        proposal.logvote_set.filter(vote_choice=LogVote.VOTE_FOR, hide=False).values_list('amount', flat=True))
+        proposal.logvote_set.filter(
+            vote_choice=LogVote.VOTE_FOR,
+            hide=False,
+            claimed=False,
+            asset_code__in=supported_vote_assets,
+        ).values_list('amount', flat=True))
     vote_against_result = sum(
-        proposal.logvote_set.filter(vote_choice=LogVote.VOTE_AGAINST, hide=False).values_list('amount', flat=True),
+        proposal.logvote_set.filter(
+            vote_choice=LogVote.VOTE_AGAINST,
+            hide=False,
+            claimed=False,
+            asset_code__in=supported_vote_assets,
+        ).values_list('amount', flat=True),
     )
     vote_abstain_result = sum(
-        proposal.logvote_set.filter(vote_choice=LogVote.VOTE_ABSTAIN, hide=False).values_list('amount', flat=True),
+        proposal.logvote_set.filter(
+            vote_choice=LogVote.VOTE_ABSTAIN,
+            hide=False,
+            claimed=False,
+            asset_code__in=supported_vote_assets,
+        ).values_list('amount', flat=True),
     )
     proposal.vote_for_result = vote_for_result
     proposal.vote_against_result = vote_against_result
     proposal.vote_abstain_result = vote_abstain_result
-
-    response = requests.get(settings.AQUA_CIRCULATING_URL)
-    if response.status_code == 200:
-        proposal.aqua_circulating_supply = response.json()
 
     response = requests.get(settings.ICE_CIRCULATING_URL)
     if response.status_code == 200:
@@ -239,4 +251,4 @@ def _update_proposal_final_results(proposal_id):
 
     with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
         proposal.save(update_fields=['vote_for_result', 'vote_against_result', 'vote_abstain_result',
-                                     'aqua_circulating_supply', 'ice_circulating_supply'])
+                                     'ice_circulating_supply'])

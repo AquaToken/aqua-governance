@@ -187,9 +187,8 @@ class Proposal(models.Model):
             self.abstain_issuer = keypair.public_key
 
         if not self.pk:
-            response = requests.get(settings.AQUA_CIRCULATING_URL)
-            if response.status_code == 200:
-                self.aqua_circulating_supply = response.json()
+            # AQUA voting is deprecated: keep denominator based on ICE only for new proposals.
+            self.aqua_circulating_supply = 0
             response = requests.get(settings.ICE_CIRCULATING_URL)
             if response.status_code == 200:
                 self.ice_circulating_supply = float(response.json()['ice_supply_amount'])
