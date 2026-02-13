@@ -38,7 +38,7 @@ class ProposalAdmin(admin.ModelAdmin):
 
     def _list_display_quorum(self, obj):
         if obj.vote_for_result + obj.vote_against_result + obj.vote_abstain_result >= (
-            float(obj.aqua_circulating_supply) + float(obj.ice_circulating_supply)) * obj.percent_for_quorum / 100:
+            float(obj.ice_circulating_supply)) * obj.percent_for_quorum / 100:
             return 'Enough votes'
         return 'Not enough votes'
 
