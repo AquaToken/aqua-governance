@@ -1,6 +1,6 @@
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from typing import Optional, Any
 
@@ -74,6 +74,7 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
     horizon_server = Server(settings.HORIZON_URL)
 
     for proposal in proposals:
+        expected_unlock_timestamp = _get_expected_unlock_timestamp(proposal)
         request_builders = (
             (
                 horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
@@ -102,6 +103,14 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
         # Making claimable balances groups by vote_key
         for request_builder in request_builders:
             for balance in load_all_records(request_builder[0]):
+                if not _has_valid_unlock_date(balance, expected_unlock_timestamp):
+                    logger.info(
+                        "Skip claimable balance %s for proposal %s due to invalid abs_before values: %s",
+                        balance.get("id"),
+                        proposal.id,
+                        _extract_abs_before_values(balance),
+                    )
+                    continue
                 try:
                     vote_key = generate_vote_key(balance, proposal, request_builder[1])
                     raw_vote_group = raw_vote_groups.get(vote_key, [])
@@ -240,3 +249,40 @@ def _update_proposal_final_results(proposal_id):
     with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
         proposal.save(update_fields=['vote_for_result', 'vote_against_result', 'vote_abstain_result',
                                      'aqua_circulating_supply', 'ice_circulating_supply'])
+
+
+def _extract_abs_before_values(claimable_balance: dict[str, Any]) -> list[str]:
+    abs_before_values = []
+    for claimant in claimable_balance.get("claimants", []):
+        abs_before = claimant.get("predicate", {}).get("not", {}).get("abs_before")
+        if abs_before is not None:
+            abs_before_values.append(abs_before)
+    return abs_before_values
+
+
+def _get_expected_unlock_timestamp(proposal: Proposal) -> int:
+    expected_unlock_date = proposal.end_at + timedelta(hours=1)
+    if timezone.is_naive(expected_unlock_date):
+        expected_unlock_date = expected_unlock_date.replace(tzinfo=dt_timezone.utc)
+    return int(expected_unlock_date.timestamp())
+
+
+def _has_valid_unlock_date(claimable_balance: dict[str, Any], expected_unlock_timestamp: int) -> bool:
+    abs_before_values = _extract_abs_before_values(claimable_balance)
+    if not abs_before_values:
+        return False
+
+    for abs_before in abs_before_values:
+        try:
+            abs_before_date = date_parse(abs_before)
+        except (TypeError, ValueError):
+            return False
+
+        if abs_before_date is None:
+            return False
+        if timezone.is_naive(abs_before_date):
+            abs_before_date = abs_before_date.replace(tzinfo=dt_timezone.utc)
+        if int(abs_before_date.timestamp()) != expected_unlock_timestamp:
+            return False
+
+    return True
