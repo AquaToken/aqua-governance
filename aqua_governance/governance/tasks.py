@@ -22,6 +22,7 @@ from aqua_governance.utils.signals import DisableSignals
 
 
 logger = logging.getLogger()
+UNLOCK_TIMESTAMP_TOLERANCE_SECONDS = 1
 
 @celery_app.task(ignore_result=True)
 def task_update_proposal_status(proposal_id):
@@ -102,19 +103,19 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
 
         # Making claimable balances groups by vote_key
         for request_builder in request_builders:
-            for balance in load_all_records(request_builder[0]):
-                if not _has_valid_unlock_date(balance, expected_unlock_timestamp):
+            for claimable_balance in load_all_records(request_builder[0]):
+                if not _has_valid_unlock_date(claimable_balance, expected_unlock_timestamp):
                     logger.info(
-                        "Skip claimable balance %s for proposal %s due to invalid abs_before values: %s",
-                        balance.get("id"),
+                        "Skip claimable claimable_balance %s for proposal %s due to invalid abs_before values: %s",
+                        claimable_balance.get("id"),
                         proposal.id,
-                        _extract_abs_before_values(balance),
+                        _extract_abs_before_values(claimable_balance),
                     )
                     continue
                 try:
-                    vote_key = generate_vote_key(balance, proposal, request_builder[1])
+                    vote_key = generate_vote_key(claimable_balance, proposal, request_builder[1])
                     raw_vote_group = raw_vote_groups.get(vote_key, [])
-                    raw_vote_group.append((request_builder[1], balance))
+                    raw_vote_group.append((request_builder[1], claimable_balance))
                     raw_vote_groups.update({vote_key: raw_vote_group})
                 except GenerateGrouKeyException:
                     logger.warning('Error generating vote_key', exc_info=sys.exc_info())
@@ -264,25 +265,68 @@ def _get_expected_unlock_timestamp(proposal: Proposal) -> int:
     expected_unlock_date = proposal.end_at + timedelta(hours=1)
     if timezone.is_naive(expected_unlock_date):
         expected_unlock_date = expected_unlock_date.replace(tzinfo=dt_timezone.utc)
-    return int(expected_unlock_date.timestamp())
+    return round(expected_unlock_date.timestamp())
+
+
+def _parse_abs_before_timestamp(abs_before: Any) -> Optional[int]:
+    if abs_before is None:
+        return None
+
+    if isinstance(abs_before, str) and abs_before.isdigit():
+        return int(abs_before)
+
+    try:
+        abs_before_date = date_parse(str(abs_before))
+    except (TypeError, ValueError):
+        return None
+
+    if abs_before_date is None:
+        return None
+    if timezone.is_naive(abs_before_date):
+        abs_before_date = abs_before_date.replace(tzinfo=dt_timezone.utc)
+
+    return round(abs_before_date.timestamp())
+
+
+def _parse_epoch_timestamp(epoch_value: Any) -> Optional[int]:
+    if epoch_value is None:
+        return None
+
+    if isinstance(epoch_value, (int, float)):
+        return int(round(float(epoch_value)))
+
+    if isinstance(epoch_value, str):
+        epoch_value = epoch_value.strip()
+        if not epoch_value:
+            return None
+        try:
+            return int(round(float(epoch_value)))
+        except ValueError:
+            return None
+
+    return None
 
 
 def _has_valid_unlock_date(claimable_balance: dict[str, Any], expected_unlock_timestamp: int) -> bool:
-    abs_before_values = _extract_abs_before_values(claimable_balance)
-    if not abs_before_values:
-        return False
+    has_abs_before = False
+    for claimant in claimable_balance.get("claimants", []):
+        predicate_not = claimant.get("predicate", {}).get("not", {})
+        abs_before = predicate_not.get("abs_before")
+        if abs_before is None:
+            continue
 
-    for abs_before in abs_before_values:
-        try:
-            abs_before_date = date_parse(abs_before)
-        except (TypeError, ValueError):
+        has_abs_before = True
+        abs_before_timestamp = _parse_abs_before_timestamp(abs_before)
+        if abs_before_timestamp is None:
+            return False
+        abs_before_epoch = predicate_not.get("abs_before_epoch")
+        if abs_before_epoch is not None:
+            abs_before_epoch_timestamp = _parse_epoch_timestamp(abs_before_epoch)
+            if abs_before_epoch_timestamp is None:
+                return False
+            if abs(abs_before_timestamp - abs_before_epoch_timestamp) > UNLOCK_TIMESTAMP_TOLERANCE_SECONDS:
+                return False
+        if abs(abs_before_timestamp - expected_unlock_timestamp) > UNLOCK_TIMESTAMP_TOLERANCE_SECONDS:
             return False
 
-        if abs_before_date is None:
-            return False
-        if timezone.is_naive(abs_before_date):
-            abs_before_date = abs_before_date.replace(tzinfo=dt_timezone.utc)
-        if int(abs_before_date.timestamp()) != expected_unlock_timestamp:
-            return False
-
-    return True
+    return has_abs_before
