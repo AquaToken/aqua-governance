@@ -4,7 +4,7 @@ from django.conf import settings
 
 from rest_framework import serializers
 
-from aqua_governance.governance.models import Proposal, HistoryProposal
+from aqua_governance.governance.models import AssetRecord, Proposal, HistoryProposal
 from aqua_governance.governance.serializer_fields import QuillField
 from aqua_governance.governance.serializers import HistoryProposalSerializer,LogVoteSerializer
 from aqua_governance.utils.payments import check_transaction_xdr
@@ -21,7 +21,7 @@ class ProposalListSerializer(serializers.ModelSerializer):
             'is_simple_proposal', 'aqua_circulating_supply', 'proposal_status', 'payment_status',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'last_updated_at', 'created_at',
             'logvote_set', 'percent_for_quorum', 'ice_circulating_supply', 'vote_for_issuer', 'vote_against_issuer',
-            'abstain_issuer', 'vote_abstain_result'
+            'abstain_issuer', 'vote_abstain_result', 'proposal_type', 'target_asset_address',
         ]
 
 
@@ -37,7 +37,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
             'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',
             'aqua_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
             'history_proposal', 'created_at', 'percent_for_quorum', 'ice_circulating_supply',
-            'abstain_issuer', 'vote_abstain_result'
+            'abstain_issuer', 'vote_abstain_result', 'proposal_type', 'target_asset_address',
         ]
 
 
@@ -51,6 +51,7 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
             'discord_channel_name', 'discord_username', 'envelope_xdr', 'discord_channel_url',
             'proposal_status', 'payment_status', 'draft', 'last_updated_at', 'created_at',
+            'proposal_type', 'target_asset_address',
         ]
         read_only_fields = [
             'proposal_status', 'payment_status', 'draft', 'start_at', 'end_at', 'last_updated_at', 'created_at',
@@ -60,6 +61,13 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
             'envelope_xdr': {'required': True},
             'transaction_hash': {'required': True},
         }
+
+    def validate(self, attrs):
+        proposal_type = attrs.get('proposal_type', Proposal.GENERAL)
+        target_asset_address = attrs.get('target_asset_address')
+        if proposal_type != Proposal.GENERAL and not target_asset_address:
+            raise serializers.ValidationError({'target_asset_address': ['This field is required.']})
+        return attrs
 
     def create(self, validated_data):
         validated_data['draft'] = True
@@ -83,11 +91,13 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'envelope_xdr',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
             'new_envelope_xdr', 'new_transaction_hash', 'new_title', 'new_text',
+            'proposal_type', 'target_asset_address',
         ]
         read_only_fields = [
             'id', 'proposed_by', 'start_at', 'end_at', 'version', 'title', 'text',
             'discord_channel_url', 'discord_channel_name', 'discord_username',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'proposal_type', 'target_asset_address',
         ]
         extra_kwargs = {
             'new_title': {'required': True},
@@ -117,11 +127,13 @@ class SubmitSerializer(serializers.ModelSerializer):
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'envelope_xdr',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
             'new_start_at', 'new_end_at', 'new_envelope_xdr', 'new_transaction_hash',
+            'proposal_type', 'target_asset_address',
         ]
         read_only_fields = [
             'id', 'proposed_by', 'title', 'text',
             'discord_channel_url', 'discord_channel_name', 'discord_username',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'proposal_type', 'target_asset_address',
         ]
         extra_kwargs = {
             'new_start_at': {'required': True},
@@ -136,3 +148,12 @@ class SubmitSerializer(serializers.ModelSerializer):
         status = check_transaction_xdr(data_to_check, settings.PROPOSAL_SUBMIT_COST)
         validated_data['payment_status'] = status
         return super(SubmitSerializer, self).update(instance, validated_data)
+
+
+class AssetRecordSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssetRecord
+        fields = [
+            'asset_address', 'asset_code', 'asset_issuer', 'status',
+            'added_ledger', 'updated_ledger', 'last_proposal_id', 'meta_hash', 'synced_at',
+        ]

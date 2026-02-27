@@ -57,6 +57,16 @@ class Proposal(models.Model):
         (NONE, 'None'),
     )
 
+    GENERAL = 'GENERAL'
+    ASSET_WHITELIST = 'ASSET_WHITELIST'
+    ASSET_REVOCATION = 'ASSET_REVOCATION'
+
+    PROPOSAL_TYPE_CHOICES = (
+        (GENERAL, 'General'),
+        (ASSET_WHITELIST, 'Asset Whitelist'),
+        (ASSET_REVOCATION, 'Asset Revocation'),
+    )
+
     proposed_by = models.CharField(max_length=56)
     title = models.CharField(max_length=256)
     text = QuillField()
@@ -74,6 +84,8 @@ class Proposal(models.Model):
     hide = models.BooleanField(default=False)
     is_simple_proposal = models.BooleanField(default=True)  # for future custom voting options
     draft = models.BooleanField(default=False)
+    proposal_type = models.CharField(max_length=32, choices=PROPOSAL_TYPE_CHOICES, default=GENERAL)
+    target_asset_address = models.CharField(max_length=56, null=True, blank=True)
 
     status = models.CharField(choices=PROPOSAL_STATUS_CHOICES, max_length=64, default=FINE)  # TODO: remove
     proposal_status = models.CharField(choices=NEW_PROPOSAL_STATUS_CHOICES, max_length=64, default=DISCUSSION)
@@ -298,3 +310,51 @@ class HistoryProposal(models.Model):
 
     def __str__(self):
         return 'History proposal ' + str(self.id)
+
+
+class AssetRecord(models.Model):
+    UNKNOWN = 'unknown'
+    ALLOWED = 'allowed'
+    DENIED = 'denied'
+    STATUS_CHOICES = (
+        (UNKNOWN, 'Unknown'),
+        (ALLOWED, 'Allowed'),
+        (DENIED, 'Denied'),
+    )
+
+    asset_address = models.CharField(max_length=56, unique=True)
+    asset_code = models.CharField(max_length=12, blank=True)
+    asset_issuer = models.CharField(max_length=56, blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=UNKNOWN)
+    added_ledger = models.PositiveIntegerField(default=0)
+    updated_ledger = models.PositiveIntegerField(default=0)
+    last_proposal_id = models.BigIntegerField(null=True, blank=True)
+    meta_hash = models.CharField(max_length=64, blank=True)
+    synced_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.asset_address
+
+
+class ProposalExecution(models.Model):
+    PENDING = 'PENDING'
+    SUCCESS = 'SUCCESS'
+    FAILED = 'FAILED'
+    SKIPPED = 'SKIPPED'
+    STATUS_CHOICES = (
+        (PENDING, 'Pending'),
+        (SUCCESS, 'Success'),
+        (FAILED, 'Failed'),
+        (SKIPPED, 'Skipped'),
+    )
+
+    proposal = models.OneToOneField(Proposal, on_delete=models.CASCADE)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=PENDING)
+    tx_hash = models.CharField(max_length=64, null=True, blank=True)
+    meta_hash = models.CharField(max_length=64, blank=True)
+    evidence_json = models.TextField(blank=True)
+    executed_at = models.DateTimeField(null=True, blank=True)
+    error = models.TextField(blank=True)
+
+    def __str__(self):
+        return str(self.proposal_id)

@@ -234,3 +234,10 @@ NETWORK_PASSPHRASE = Network.public_network().network_passphrase
 # --------------------------------------------------------------------------
 
 DEFAULT_DISCORD_URL = 'https://discord.com/channels/862710317825392660/1046931670458187836'
+
+
+ASSET_REGISTRY_CONTRACT_ADDRESS = env('ASSET_REGISTRY_CONTRACT_ADDRESS', default='')
+SOROBAN_RPC_URL = env('SOROBAN_RPC_URL', default='https://soroban-testnet.stellar.org')
+REGISTRY_OPERATOR_SECRET_KEY = env('REGISTRY_OPERATOR_SECRET_KEY', default='')
+REGISTRY_SYNC_PAGE_LIMIT = 50
+GOV_BASE_URL = env('GOV_BASE_URL', default='https://gov.aqua.network')
