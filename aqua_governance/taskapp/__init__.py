@@ -39,4 +39,14 @@ def setup_periodic_tasks(sender, **kwargs):
             'schedule': crontab(minute='*/10'),
             'args': (),
         },
+        'aqua_governance.governance.tasks.task_execute_asset_proposals': {
+            'task': 'aqua_governance.governance.tasks.task_execute_asset_proposals',
+            'schedule': crontab(minute='*/5'),
+            'args': (),
+        },
+        'aqua_governance.governance.tasks.task_sync_asset_registry': {
+            'task': 'aqua_governance.governance.tasks.task_sync_asset_registry',
+            'schedule': crontab(minute='*/10'),
+            'args': (),
+        },
     })

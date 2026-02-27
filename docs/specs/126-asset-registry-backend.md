@@ -2,51 +2,52 @@
 
 **Proposal:** #125
 **Status:** Draft
-**Scope:** aqua-governance (Django) — новый тип пропозала, автоматическое исполнение на Soroban, кеш реестра ассетов
+**Scope:** aqua-governance (Django) — new proposal type, automatic Soroban execution, asset registry cache
 
 ---
 
-## Контекст
+## Context
 
-- **Почему делаем:** Proposal #125 вводит ончейн реестр допущенных ассетов (AssetEligibilityRegistry, spec 125). Пулы получают AQUA emissions только если все ассеты в них — Allowed в реестре. Бекенд должен (а) позволить создавать governance proposals специально для вайтлистинга/отзыва ассетов, (б) после прохождения голосования автоматически исполнять результат на Soroban-контракте, (в) кешировать состояние реестра и отдавать через API.
-- **Контракт-ссылка:** `docs/specs/125-asset-eligibility-registry.md` — Soroban AssetEligibilityRegistry
-- **Ограничения:**
-  - aqua-governance написан на Django 3.2 + DRF; менять стек нельзя
-  - stellar-sdk (уже в зависимостях) используется для Soroban view/invoke calls
-  - Ключ оператора хранится в env settings (Phase 1); в Phase 2 заменяется governance executor
-
----
-
-## Цели
-
-- Добавить `proposal_type` в модель Proposal (GENERAL | ASSET_WHITELIST | ASSET_REVOCATION)
-- Добавить структурированное поле `target_asset_address` для ассет-пропозалов
-- Celery автоматически исполняет прошедшие asset proposals на Soroban (`set_status`)
-- Celery периодически синхронизирует состояние реестра в PostgreSQL
-- DRF endpoint `/api/asset-registry/` отдаёт кешированные статусы ассетов
+- **Why:** Proposal #125 introduces an on-chain asset eligibility registry (AssetEligibilityRegistry, spec 125). Pools receive AQUA emissions only if all their assets are Allowed in the registry. The backend must (a) support governance proposals specifically for whitelisting/revoking assets, (b) automatically execute passed proposals on the Soroban contract, (c) cache registry state and expose it via API.
+- **Contract reference:** `docs/specs/125-asset-eligibility-registry.md` — Soroban AssetEligibilityRegistry
+- **Constraints:**
+  - aqua-governance is Django 3.2 + DRF; stack must not change
+  - stellar-sdk (already a dependency) is used for Soroban view/invoke calls
+  - Operator key is stored in env settings (Phase 1); replaced by governance executor in Phase 2
 
 ---
 
-## Не цели
+## Goals
 
-- Grace period / grandfathering логика (отдельная задача)
-- Emissions pipeline gating (отдельная задача)
-- Pool Incentives gating (отдельная задача)
-- UI изменения
-- ProposalExecRecord на Soroban (не реализовано в Phase 1 контракта)
-- Валидация содержимого текста whitelist proposal (требования к полноте описания — на усмотрение DAO)
+- Add `proposal_type` to the Proposal model (GENERAL | ASSET_WHITELIST | ASSET_REVOCATION)
+- Add `target_asset_address` field for asset proposals
+- Celery automatically executes passed asset proposals on Soroban (`set_status`)
+- Celery periodically syncs registry state into PostgreSQL
+- DRF endpoint `/api/asset-registry/` serves cached asset statuses
 
 ---
 
-## Требования
+## Non-goals
 
-### Поведение
+- Grace period / grandfathering logic (separate task)
+- Emissions pipeline gating (separate task)
+- Pool Incentives gating (separate task)
+- UI changes
+- ProposalExecRecord on Soroban (not implemented in Phase 1 of the contract)
+- Validation of whitelist proposal text content (completeness requirements are up to DAO)
 
-#### Proposal flow для asset proposals
+---
 
-1. Пользователь создаёт proposal через `POST /api/proposal/` с `proposal_type=ASSET_WHITELIST` (или `ASSET_REVOCATION`) и `target_asset_address=<SAC address>`.
-2. Proposal проходит стандартный lifecycle: DISCUSSION → (7 дней) → VOTING → VOTED.
-3. После перехода в VOTED Celery вычисляет **pass condition**:
+## Requirements
+
+### Behavior
+
+#### Proposal flow for asset proposals
+
+1. User creates a proposal via `POST /api/proposal/` with `proposal_type=ASSET_WHITELIST` (or `ASSET_REVOCATION`) and `target_asset_address=<SAC address>`.
+2. Proposal goes through the standard lifecycle: DISCUSSION → (7 days) → VOTING → VOTED.
+   - Asset proposals require a **minimum voting period of 10 days** (`new_end_at - new_start_at >= 10 days`), enforced at submit time. Shorter periods → 400.
+3. Once VOTED, Celery evaluates the **pass condition**:
    ```
    passed = (
      vote_for_result > vote_against_result
@@ -56,13 +57,13 @@
        >= percent_for_quorum / 100
    )
    ```
-4. Если `passed`:
-   - Формируется `evidence_json` (см. структуру ниже)
-   - Вычисляется `meta_hash = SHA256(evidence_json).hex()`
-   - Вызывается `AssetEligibilityRegistry.set_status(operator, asset, status, proposal_id, meta_hash)` через Soroban
-   - Записывается `ProposalExecution` с tx_hash и статусом SUCCESS
-5. Если `not passed` или quorum не набран: `ProposalExecution` с status=SKIPPED (пропозал проиграл, ничего ончейн не пишется).
-6. Если Soroban вызов упал (network error, etc.): `ProposalExecution.status = FAILED`, задача будет повторена при следующем запуске.
+4. If `passed`:
+   - Build `evidence_json` (see schema below)
+   - Compute `meta_hash = SHA256(evidence_json).hex()`
+   - Call `AssetEligibilityRegistry.set_status(operator, asset, status, proposal_id, meta_hash)` via Soroban
+   - Record a `ProposalExecution` with tx_hash and status=SUCCESS
+5. If `not passed` or quorum not met: record `ProposalExecution` with status=SKIPPED (nothing written on-chain).
+6. If the Soroban call fails (network error, timeout, etc.): `ProposalExecution.status = FAILED`; the task will retry on the next run.
 
 #### Evidence JSON
 
@@ -89,27 +90,27 @@
 }
 ```
 
-#### Синхронизация реестра
+#### Registry synchronization
 
-- Celery периодически вызывает `AssetEligibilityRegistry.list(offset, limit)` (пагинированно) и upsert'ит все записи в таблицу `AssetRecord`.
-- `synced_at` обновляется при каждой успешной синхронизации.
-- Синхронизация запускается также после каждого успешного `set_status` (чтобы новый статус сразу попал в кеш).
+- Celery periodically calls `AssetEligibilityRegistry.list(offset, limit)` (paginated) and upserts all records into the `AssetRecord` table.
+- `synced_at` is updated on every successful sync.
+- Sync is also triggered immediately after each successful `set_status` call so the new status appears in cache without delay.
 
 ---
 
-### API / интерфейсы
+### API / Interfaces
 
 #### GET /api/asset-registry/
 
-Список всех ассетов из кеша. Только публичный чтение.
+List all assets from the local cache. Public, read-only.
 
 **Query params:**
 
 | Param | Values | Effect |
 |-------|--------|--------|
-| `status` | `allowed` / `denied` / `unknown` | Фильтр по статусу |
-| `ordering` | `asset_address`, `updated_ledger`, `synced_at` | Сортировка |
-| `limit` | integer | Размер страницы |
+| `status` | `allowed` / `denied` / `unknown` | Filter by status |
+| `ordering` | `asset_address`, `updated_ledger`, `synced_at` | Sort order |
+| `limit` | integer | Page size |
 
 **Response item:**
 ```json
@@ -128,22 +129,24 @@
 
 #### GET /api/asset-registry/{asset_address}/
 
-Один ассет. 404 если не в кеше.
+Single asset. Returns 404 if not in cache.
 
-#### POST /api/proposal/ — расширение для asset proposals
+#### POST /api/proposal/ — extended for asset proposals
 
-Новые поля в `ProposalCreateSerializer`:
+New fields in `ProposalCreateSerializer`:
 
-| Поле | Тип | Обязательность | Примечание |
-|------|-----|---------------|-----------|
-| `proposal_type` | Choice | нет (default=GENERAL) | GENERAL / ASSET_WHITELIST / ASSET_REVOCATION |
-| `target_asset_address` | CharField(56) | да, если type != GENERAL | Адрес SAC контракта ассета |
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `proposal_type` | Choice | no (default=GENERAL) | GENERAL / ASSET_WHITELIST / ASSET_REVOCATION |
+| `target_asset_address` | CharField(56) | yes if type != GENERAL | SAC contract address of the asset |
 
-Валидация: если `proposal_type` != GENERAL и `target_asset_address` пустой → 400.
+Validation:
+- if `proposal_type` != GENERAL and `target_asset_address` is empty → 400 (on `POST /api/proposal/`)
+- if `proposal_type` != GENERAL and `new_end_at - new_start_at < 10 days` → 400 (on submit action)
 
 #### GET /api/proposal/?proposal_type=...
 
-Фильтрация через новый `ProposalTypeFilterBackend`:
+Filtering via the new `ProposalTypeFilterBackend`:
 
 | Param | Values |
 |-------|--------|
@@ -151,9 +154,9 @@
 
 ---
 
-### Данные / миграции
+### Data / Migrations
 
-#### Изменения в Proposal (0024_proposal_type_and_target_asset.py)
+#### Changes to Proposal (migration 0026)
 
 ```python
 proposal_type = models.CharField(
@@ -168,7 +171,7 @@ proposal_type = models.CharField(
 target_asset_address = models.CharField(max_length=56, null=True, blank=True)
 ```
 
-#### Новая модель: AssetRecord
+#### New model: AssetRecord
 
 ```python
 class AssetRecord(models.Model):
@@ -177,18 +180,18 @@ class AssetRecord(models.Model):
     DENIED  = 'denied'
     STATUS_CHOICES = [(UNKNOWN, 'Unknown'), (ALLOWED, 'Allowed'), (DENIED, 'Denied')]
 
-    asset_address  = models.CharField(max_length=56, unique=True)
-    asset_code     = models.CharField(max_length=12, blank=True)
-    asset_issuer   = models.CharField(max_length=56, blank=True)
-    status         = models.CharField(max_length=10, choices=STATUS_CHOICES, default=UNKNOWN)
-    added_ledger   = models.PositiveIntegerField(default=0)
-    updated_ledger = models.PositiveIntegerField(default=0)
+    asset_address    = models.CharField(max_length=56, unique=True)
+    asset_code       = models.CharField(max_length=12, blank=True)
+    asset_issuer     = models.CharField(max_length=56, blank=True)
+    status           = models.CharField(max_length=10, choices=STATUS_CHOICES, default=UNKNOWN)
+    added_ledger     = models.PositiveIntegerField(default=0)
+    updated_ledger   = models.PositiveIntegerField(default=0)
     last_proposal_id = models.BigIntegerField(null=True, blank=True)
-    meta_hash      = models.CharField(max_length=64, blank=True)
-    synced_at      = models.DateTimeField(auto_now=True)
+    meta_hash        = models.CharField(max_length=64, blank=True)
+    synced_at        = models.DateTimeField(auto_now=True)
 ```
 
-#### Новая модель: ProposalExecution
+#### New model: ProposalExecution
 
 ```python
 class ProposalExecution(models.Model):
@@ -206,19 +209,22 @@ class ProposalExecution(models.Model):
     error         = models.TextField(blank=True)
 ```
 
-#### Новые настройки (base.py / env)
+#### New settings (base.py / env)
 
 ```python
-ASSET_REGISTRY_CONTRACT_ADDRESS = env('ASSET_REGISTRY_CONTRACT_ADDRESS', default='')
-REGISTRY_OPERATOR_SECRET_KEY    = env('REGISTRY_OPERATOR_SECRET_KEY', default='')
-REGISTRY_SYNC_PAGE_LIMIT        = 50  # MAX_PAGE_LIMIT контракта
+ASSET_REGISTRY_CONTRACT_ADDRESS  = env('ASSET_REGISTRY_CONTRACT_ADDRESS', default='')
+REGISTRY_OPERATOR_SECRET_KEY     = env('REGISTRY_OPERATOR_SECRET_KEY', default='')
+REGISTRY_SYNC_PAGE_LIMIT         = 50  # matches MAX_PAGE_LIMIT in contract
+SOROBAN_RPC_URL                  = env('SOROBAN_RPC_URL', default='https://soroban-testnet.stellar.org')
+GOV_BASE_URL                     = env('GOV_BASE_URL', default='https://gov.aqua.network')
+ASSET_PROPOSAL_MIN_VOTING_DAYS   = 10  # minimum voting period mandated by Proposal #125
 ```
 
 ---
 
-### Celery задачи
+### Celery Tasks
 
-#### task_execute_asset_proposals (каждые 5 мин)
+#### task_execute_asset_proposals (every 5 min)
 
 ```
 proposals = Proposal.objects.filter(
@@ -232,115 +238,98 @@ for proposal in proposals:
 ```
 
 `_execute_single_asset_proposal`:
-1. Вычислить pass condition (формула выше)
-2. Если не passed → update status=SKIPPED, return
-3. Сформировать evidence_json, вычислить meta_hash
-4. Определить `status_code`: ASSET_WHITELIST → 1, ASSET_REVOCATION → 2
-5. Вызвать Soroban `set_status(operator, asset_address, status_code, proposal.id, meta_hash)`
-6. Получить tx_hash из ответа
-7. Update ProposalExecution: status=SUCCESS, tx_hash, executed_at=now()
-8. Вызвать `task_sync_asset_registry.delay()`
+1. Evaluate pass condition (formula above); if not passed → status=SKIPPED, return
+2. Build evidence_json, compute meta_hash = SHA256(evidence_json).hex()
+3. Determine `status_code`: ASSET_WHITELIST → 1, ASSET_REVOCATION → 2
+4. Call `soroban.set_asset_status(target_asset_address, status_code, proposal.id, meta_hash)`
+5. On success: update ProposalExecution with status=SUCCESS, tx_hash, executed_at=now()
+6. Trigger `task_sync_asset_registry.delay()`
 
-При ошибке Soroban: update status=FAILED, error=str(exc). Повтор при следующем запуске.
+On any Soroban exception: status=FAILED, error=str(exc). Retried on next task run.
 
-#### task_sync_asset_registry (каждые 10 мин)
+#### task_sync_asset_registry (every 10 min)
 
-```
-contract = AssetRegistryContract(settings.ASSET_REGISTRY_CONTRACT_ADDRESS)
-offset = 0
-while True:
-    page = contract.list(offset, settings.REGISTRY_SYNC_PAGE_LIMIT)
-    for item in page.items:
-        AssetRecord.objects.update_or_create(
-            asset_address=item.asset_address,
-            defaults={status, added_ledger, updated_ledger, last_proposal_id, meta_hash}
-        )
-    if len(page.items) < settings.REGISTRY_SYNC_PAGE_LIMIT:
-        break
-    offset += len(page.items)
-```
-
-`asset_code` / `asset_issuer` заполняются при первом создании через stellar-sdk asset lookup (или оставляем пустыми, если SAC-адрес не резолвится).
+Paginates through `soroban.fetch_registry_page(offset, limit)` until an empty page is returned. For each item, upserts into `AssetRecord` via `update_or_create`. Skips silently if `ASSET_REGISTRY_CONTRACT_ADDRESS` is not configured.
 
 ---
 
-### Ошибки / краевые кейсы
+### Errors / Edge Cases
 
-| Кейс | Поведение |
-|------|----------|
-| `target_asset_address` не указан для ASSET_WHITELIST/REVOCATION | 400 при создании proposal |
-| Proposal проиграл (quorum не набран / against > for) | ProposalExecution.status=SKIPPED, ничего на контракт не пишется |
-| Soroban вызов упал (network/timeout) | status=FAILED, повтор при следующем запуске task_execute |
-| `set_status` уже был вызван для этого proposal_id | контракт не отклоняет (не реализовано ProposalExecRecord в Phase 1), но OneToOneField на ProposalExecution предотвращает повторный вызов из бекенда |
-| `ASSET_REGISTRY_CONTRACT_ADDRESS` не задан | task_execute и task_sync логируют ошибку и выходят без паники |
-| Ключ оператора не задан | task_execute логирует ошибку, status=FAILED |
-| Реестр пуст (ещё не синхронизирован) | `/api/asset-registry/` возвращает `[]`, не ошибку |
-| Одновременный запуск двух экземпляров task_execute | select_for_update или unique constraint на ProposalExecution предотвращает двойное исполнение |
-
----
-
-## Архитектура / изменения по модулям
-
-| Файл / модуль | Изменение |
-|--------------|----------|
-| `governance/models.py` | +`proposal_type`, `+target_asset_address` в Proposal; +`AssetRecord`; +`ProposalExecution` |
-| `governance/migrations/0024_*.py` | Миграция под новые поля и модели |
-| `governance/serializers_v2.py` | `ProposalCreateSerializer`: +`proposal_type`, `+target_asset_address`, валидация пары |
-| `governance/filters.py` | +`ProposalTypeFilterBackend` |
-| `governance/views.py` | `ProposalViewSet.filter_backends`: добавить `ProposalTypeFilterBackend` |
-| `governance/serializers.py` (новый) | `AssetRecordSerializer` |
-| `governance/views.py` | +`AssetRegistryView` (ListModelMixin + RetrieveModelMixin) |
-| `governance/urls.py` | +`router.register('asset-registry', AssetRegistryView)` |
-| `governance/tasks.py` | +`task_execute_asset_proposals`, +`task_sync_asset_registry`, `+_execute_single_asset_proposal` |
-| `utils/soroban.py` (новый) | Тонкая обёртка над stellar-sdk для `set_status` invoke и `list` view call |
-| `taskapp/__init__.py` | +beat schedule для двух новых задач |
-| `config/settings/base.py` | +`ASSET_REGISTRY_CONTRACT_ADDRESS`, `+REGISTRY_OPERATOR_SECRET_KEY`, `+REGISTRY_SYNC_PAGE_LIMIT` |
-| `governance/admin.py` | +`AssetRecord`, `+ProposalExecution` в Django admin (read-only) |
+| Case | Behavior |
+|------|---------|
+| `target_asset_address` missing for ASSET_WHITELIST/REVOCATION | 400 on proposal creation |
+| Voting period < 10 days for asset proposal | 400 on proposal submit action |
+| Proposal did not pass (quorum not met or against > for) | ProposalExecution.status=SKIPPED; nothing written on-chain |
+| Soroban call fails (network/timeout) | status=FAILED; retried on next task_execute run |
+| `set_status` called again for same proposal_id | Contract does not reject it (no ProposalExecRecord in Phase 1), but `OneToOneField` on ProposalExecution prevents a second call from the backend |
+| `ASSET_REGISTRY_CONTRACT_ADDRESS` not set | task_execute and task_sync log a warning and return early |
+| Operator key not set | task_execute raises ImproperlyConfigured → caught as exception → status=FAILED |
+| Registry not yet synced | `GET /api/asset-registry/` returns `[]`, not an error |
+| Two task_execute instances running simultaneously | `OneToOneField` unique constraint prevents double execution |
 
 ---
 
-## Тест-план
+## Architecture / Module Changes
 
-### Юнит
+| File / module | Change |
+|--------------|--------|
+| `governance/models.py` | + `proposal_type`, `target_asset_address` on Proposal; + `AssetRecord`; + `ProposalExecution` |
+| `governance/migrations/0026_*.py` | Migration for new fields and models |
+| `governance/serializers_v2.py` | `ProposalCreateSerializer`: + `proposal_type`, `target_asset_address`, pair validation; + `AssetRecordSerializer` |
+| `governance/filters.py` | + `ProposalTypeFilterBackend` |
+| `governance/views.py` | `ProposalViewSet.filter_backends`: add `ProposalTypeFilterBackend`; + `AssetRegistryView` |
+| `governance/urls.py` | + `router.register('asset-registry', AssetRegistryView)` |
+| `governance/tasks.py` | + `task_execute_asset_proposals`, `task_sync_asset_registry` |
+| `utils/soroban.py` | New — thin wrapper over stellar-sdk v13 for `set_status` invoke and `list` view call |
+| `taskapp/__init__.py` | + beat schedule for both new tasks |
+| `config/settings/base.py` | + `ASSET_REGISTRY_CONTRACT_ADDRESS`, `REGISTRY_OPERATOR_SECRET_KEY`, `REGISTRY_SYNC_PAGE_LIMIT`, `SOROBAN_RPC_URL`, `GOV_BASE_URL`, `ASSET_PROPOSAL_MIN_VOTING_DAYS` |
+| `governance/admin.py` | + `AssetRecord`, `ProposalExecution` (read-only) |
 
-- `test_proposal_type_validation`: ASSET_WHITELIST без `target_asset_address` → 400
-- `test_pass_condition`: pass/fail при разных соотношениях for/against и quorum
-- `test_evidence_json_schema`: структура evidence содержит все обязательные поля
-- `test_meta_hash_deterministic`: один и тот же evidence → один и тот же sha256
-- `test_asset_record_upsert`: повторный sync не дублирует записи
-- `test_proposal_execution_unique`: повторный запуск task_execute не создаёт второй ProposalExecution
-- `test_proposal_type_filter`: `?proposal_type=asset_whitelist` фильтрует корректно
+---
 
-### Интеграционные
+## Test Plan
 
-- `test_full_flow_whitelist`: создать ASSET_WHITELIST proposal → провести через VOTED → mock Soroban → ProposalExecution.status=SUCCESS
-- `test_full_flow_failed_proposal`: proposal не набрал quorum → status=SKIPPED, Soroban не вызывается
-- `test_sync_registry`: mock list() контракта → AssetRecord upserted корректно
-- `test_asset_registry_api`: GET /api/asset-registry/ возвращает корректный JSON
-- `test_soroban_error_retry`: Soroban падает → status=FAILED → следующий запуск задачи пробует снова
+### Unit
+
+- `test_proposal_type_validation`: ASSET_WHITELIST without `target_asset_address` → 400
+- `test_asset_proposal_min_voting_period`: submit ASSET_WHITELIST with 9-day voting period → 400; 10-day → accepted
+- `test_pass_condition`: pass/fail across different for/against and quorum values
+- `test_evidence_json_schema`: evidence contains all required fields
+- `test_meta_hash_deterministic`: same evidence input → same SHA256
+- `test_asset_record_upsert`: repeated sync does not duplicate records
+- `test_proposal_execution_unique`: repeated task_execute run does not create a second ProposalExecution
+- `test_proposal_type_filter`: `?proposal_type=asset_whitelist` filters correctly
+
+### Integration
+
+- `test_full_flow_whitelist`: create ASSET_WHITELIST proposal → advance to VOTED → mock Soroban → ProposalExecution.status=SUCCESS
+- `test_full_flow_failed_proposal`: proposal did not reach quorum → status=SKIPPED, Soroban not called
+- `test_sync_registry`: mock `list()` response → AssetRecord upserted correctly
+- `test_asset_registry_api`: GET /api/asset-registry/ returns correct JSON
+- `test_soroban_error_retry`: Soroban raises exception → status=FAILED → next task run retries
 
 ### E2E
 
-- (stagenet) полный прогон: создать пропозал → проголосовать → убедиться в ProposalExecution.status=SUCCESS и AssetRecord.status=ALLOWED
+- (stagenet) full run: create proposal → vote → verify ProposalExecution.status=SUCCESS and AssetRecord.status=ALLOWED
 
 ---
 
-## Риски и откат
+## Risks and Rollback
 
-| Риск | Митигация |
-|------|----------|
-| Ключ оператора скомпрометирован | `REGISTRY_OPERATOR_SECRET_KEY` в env/vault; ротируется через `add_writer/remove_writer` на контракте без деплоя нового бекенда |
-| Soroban network downtime | task_execute FAILED + retry; ручное исполнение через admin action как fallback |
-| Некорректный `target_asset_address` (не SAC) | Soroban вернёт ошибку → status=FAILED; proposal не будет повторно исполнен автоматически (нужно admin вмешательство) |
-| Двойной write (при сбое после Soroban tx, но до сохранения в БД) | tx_hash в ProposalExecution позволяет проверить on-chain; повторный set_status на контракте с тем же proposal_id безвреден (статус перезапишется теми же данными) |
-| Откат фичи | `proposal_type` default=GENERAL — старые proposals и API не сломаются. Новые Celery задачи можно отключить через beat schedule без кода. |
+| Risk | Mitigation |
+|------|-----------|
+| Operator key compromised | `REGISTRY_OPERATOR_SECRET_KEY` stored in env/vault; rotated via `add_writer/remove_writer` on the contract without redeploying the backend |
+| Soroban network downtime | task_execute sets FAILED + auto-retries; manual re-execution via Django admin as fallback |
+| Invalid `target_asset_address` (not a SAC) | Soroban returns an error → status=FAILED; proposal will not auto-retry (requires admin intervention) |
+| Double write (Soroban tx sent but DB save fails) | tx_hash in ProposalExecution allows on-chain verification; a repeated `set_status` with the same proposal_id is safe (contract overwrites with identical data) |
+| Feature rollback | `proposal_type` defaults to GENERAL — existing proposals and API are unaffected. New Celery tasks can be disabled via beat schedule without a code change. |
 
 ---
 
-## Out of scope (Phase 1)
+## Out of Scope (Phase 1)
 
-- Grace period: отдельная задача
-- Emissions gating: отдельная задача
-- Pool Incentives gating: отдельная задача
-- `execute_proposal` на контракте вместо `set_status` (ProposalExecRecord): Phase 2
-- Замена оператора на governance executor: Phase 2
+- Grace period: separate task
+- Emissions gating: separate task
+- Pool Incentives gating: separate task
+- `execute_proposal` on the contract instead of `set_status` (ProposalExecRecord): Phase 2
+- Replacing the operator with a governance executor: Phase 2

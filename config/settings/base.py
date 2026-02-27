@@ -225,6 +225,7 @@ PROPOSAL_COST = 1000000  # TODO: remove it
 
 PROPOSAL_SUBMIT_COST = 900000
 PROPOSAL_CREATE_OR_UPDATE_COST = 100000
+ASSET_PROPOSAL_MIN_VOTING_DAYS = 10
 
 EXPIRED_TIME = timedelta(days=30)
 DISCUSSION_TIME = timedelta(days=7)
@@ -234,3 +235,10 @@ NETWORK_PASSPHRASE = Network.public_network().network_passphrase
 # --------------------------------------------------------------------------
 
 DEFAULT_DISCORD_URL = 'https://discord.com/channels/862710317825392660/1046931670458187836'
+
+
+ASSET_REGISTRY_CONTRACT_ADDRESS = env('ASSET_REGISTRY_CONTRACT_ADDRESS', default='')
+SOROBAN_RPC_URL = env('SOROBAN_RPC_URL', default='https://soroban-testnet.stellar.org')
+REGISTRY_OPERATOR_SECRET_KEY = env('REGISTRY_OPERATOR_SECRET_KEY', default='')
+REGISTRY_SYNC_PAGE_LIMIT = 50
+GOV_BASE_URL = env('GOV_BASE_URL', default='https://gov.aqua.network')

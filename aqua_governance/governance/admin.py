@@ -1,7 +1,7 @@
 from django.contrib import admin
 
 from aqua_governance.governance.forms import ProposalAdminForm
-from aqua_governance.governance.models import LogVote, Proposal
+from aqua_governance.governance.models import AssetRecord, LogVote, Proposal, ProposalExecution
 
 
 @admin.register(Proposal)
@@ -64,3 +64,7 @@ class LogVoteAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+
+admin.site.register(AssetRecord)
+admin.site.register(ProposalExecution)

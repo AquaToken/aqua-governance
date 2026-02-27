@@ -1,5 +1,7 @@
 import logging
 import sys
+import hashlib
+import json
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional, Any
@@ -14,10 +16,11 @@ from stellar_sdk import Server
 from stellar_sdk.exceptions import NotFoundError
 
 from aqua_governance.governance.exceptions import ClaimableBalanceParsingError, GenerateGrouKeyException
-from aqua_governance.governance.models import LogVote, Proposal
+from aqua_governance.governance.models import AssetRecord, LogVote, Proposal, ProposalExecution
 from aqua_governance.governance.parser import generate_vote_key, parse_vote
 from aqua_governance.taskapp import app as celery_app
 from aqua_governance.utils.requests import load_all_records
+from aqua_governance.utils import soroban
 from aqua_governance.utils.signals import DisableSignals
 
 
@@ -163,6 +166,110 @@ def check_proposals_with_bad_horizon_error():
     failed_proposals = Proposal.objects.filter(hide=False, payment_status=Proposal.HORIZON_ERROR)
     for proposal in failed_proposals:
         proposal.check_transaction()
+
+
+@celery_app.task(ignore_result=True)
+def task_execute_asset_proposals():
+    proposals = Proposal.objects.filter(
+        proposal_type__in=[Proposal.ASSET_WHITELIST, Proposal.ASSET_REVOCATION],
+        proposal_status=Proposal.VOTED,
+    ).exclude(proposalexecution__isnull=False)
+
+    for proposal in proposals:
+        execution = ProposalExecution.objects.create(proposal=proposal, status=ProposalExecution.PENDING)
+
+        vote_for_result = Decimal(proposal.vote_for_result or 0)
+        vote_against_result = Decimal(proposal.vote_against_result or 0)
+        circulating_supply = Decimal(proposal.aqua_circulating_supply or 0) + Decimal(
+            proposal.ice_circulating_supply or 0
+        )
+
+        pass_condition = False
+        if circulating_supply > 0:
+            pass_condition = (
+                vote_for_result > vote_against_result
+                and (vote_for_result + vote_against_result) / circulating_supply
+                >= Decimal(proposal.percent_for_quorum) / 100
+            )
+
+        if not pass_condition:
+            execution.status = ProposalExecution.SKIPPED
+            execution.save(update_fields=['status'])
+            continue
+
+        status_code = 1 if proposal.proposal_type == Proposal.ASSET_WHITELIST else 2
+        evidence = {
+            'proposal_id': proposal.id,
+            'proposal_url': f'{settings.GOV_BASE_URL}/proposal/{proposal.id}',
+            'proposal_type': proposal.proposal_type,
+            'target_asset_address': proposal.target_asset_address,
+            'tally': {
+                'vote_for': str(proposal.vote_for_result),
+                'vote_against': str(proposal.vote_against_result),
+                'aqua_circulating_supply': str(proposal.aqua_circulating_supply),
+                'ice_circulating_supply': str(proposal.ice_circulating_supply),
+                'percent_for_quorum': proposal.percent_for_quorum,
+                'start_at': proposal.start_at.isoformat() if proposal.start_at else None,
+                'end_at': proposal.end_at.isoformat() if proposal.end_at else None,
+            },
+            'actions': [{'asset': proposal.target_asset_address, 'status': status_code}],
+            'computed_at': datetime.utcnow().isoformat(),
+            'computed_by': 'aqua-governance-backend',
+        }
+        evidence_json = json.dumps(evidence)
+        meta_hash = hashlib.sha256(evidence_json.encode()).hexdigest()
+
+        try:
+            tx_hash = soroban.set_asset_status(
+                proposal.target_asset_address,
+                status_code,
+                proposal.id,
+                meta_hash,
+            )
+        except Exception as exc:
+            execution.status = ProposalExecution.FAILED
+            execution.error = str(exc)
+            execution.save(update_fields=['status', 'error'])
+            continue
+
+        execution.status = ProposalExecution.SUCCESS
+        execution.tx_hash = tx_hash
+        execution.meta_hash = meta_hash
+        execution.evidence_json = evidence_json
+        execution.executed_at = timezone.now()
+        execution.save(update_fields=['status', 'tx_hash', 'meta_hash', 'evidence_json', 'executed_at'])
+        task_sync_asset_registry.delay()
+
+
+@celery_app.task(ignore_result=True)
+def task_sync_asset_registry():
+    if not settings.ASSET_REGISTRY_CONTRACT_ADDRESS:
+        logger.warning('ASSET_REGISTRY_CONTRACT_ADDRESS is empty, skip sync')
+        return
+
+    offset = 0
+    limit = settings.REGISTRY_SYNC_PAGE_LIMIT
+
+    while True:
+        items = soroban.fetch_registry_page(offset, limit)
+        if not items:
+            break
+
+        for item in items:
+            AssetRecord.objects.update_or_create(
+                asset_address=item['asset_address'],
+                defaults={
+                    'asset_code': item.get('asset_code', ''),
+                    'asset_issuer': item.get('asset_issuer', ''),
+                    'status': item['status'],
+                    'added_ledger': item['added_ledger'],
+                    'updated_ledger': item['updated_ledger'],
+                    'last_proposal_id': item.get('last_proposal_id'),
+                    'meta_hash': item.get('meta_hash', ''),
+                },
+            )
+
+        offset += len(items)
 
 
 def _make_new_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, proposal: Proposal, vote_choice: str,

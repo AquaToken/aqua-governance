@@ -16,8 +16,9 @@ from rest_framework.viewsets import GenericViewSet
 from stellar_sdk import TransactionEnvelope
 
 from aqua_governance.governance.filters import ProposalStatusFilterBackend,ProposalOwnerFilterBackend, \
-    LogVoteOwnerFilterBackend,LogVoteProposalIdFilterBackend,ProposalVoteOwnerFilterBackend
-from aqua_governance.governance.models import LogVote, Proposal, HistoryProposal
+    LogVoteOwnerFilterBackend,LogVoteProposalIdFilterBackend,ProposalVoteOwnerFilterBackend, \
+    ProposalTypeFilterBackend, AssetRecordStatusFilterBackend
+from aqua_governance.governance.models import AssetRecord, LogVote, Proposal, HistoryProposal
 from aqua_governance.governance.pagination import CustomPageNumberPagination
 from aqua_governance.governance.serializers import (
     LogVoteSerializer,
@@ -62,6 +63,20 @@ class LogVoteView(ListModelMixin, GenericViewSet):
     ordering_fields = ['created_at', 'amount', 'vote_choice', 'account_issuer']
 
 
+class AssetRegistryView(ListModelMixin, RetrieveModelMixin, GenericViewSet):
+    queryset = AssetRecord.objects.all()
+    permission_classes = (AllowAny, )
+    serializer_class = serializers_v2.AssetRecordSerializer
+    pagination_class = CustomPageNumberPagination
+    filter_backends = (
+        OrderingFilter,
+        AssetRecordStatusFilterBackend,
+    )
+    ordering = ['-updated_ledger']
+    ordering_fields = ['asset_address', 'updated_ledger', 'synced_at']
+    lookup_field = 'asset_address'
+
+
 class ProposalViewSet(
     ListModelMixin,
     UpdateModelMixin,
@@ -76,6 +91,7 @@ class ProposalViewSet(
     filter_backends = (
         OrderingFilter,
         ProposalStatusFilterBackend,
+        ProposalTypeFilterBackend,
         ProposalOwnerFilterBackend,
         ProposalVoteOwnerFilterBackend,
     )

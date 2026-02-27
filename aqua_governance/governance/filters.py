@@ -39,6 +39,22 @@ class ProposalStatusFilterBackend(BaseFilterBackend):
         return queryset
 
 
+class ProposalTypeFilterBackend(BaseFilterBackend):
+    def filter_queryset(self, request, queryset, view):
+        proposal_type_value = request.query_params.get('proposal_type')
+
+        if proposal_type_value == 'general':
+            return queryset.filter(proposal_type=Proposal.GENERAL)
+
+        if proposal_type_value == 'asset_whitelist':
+            return queryset.filter(proposal_type=Proposal.ASSET_WHITELIST)
+
+        if proposal_type_value == 'asset_revocation':
+            return queryset.filter(proposal_type=Proposal.ASSET_REVOCATION)
+
+        return queryset
+
+
 class ProposalOwnerFilterBackend(BaseFilterBackend):
     def filter_queryset(self, request, queryset, view):
         public_key = request.query_params.get('owner_public_key')
@@ -78,4 +94,12 @@ class LogVoteProposalIdFilterBackend(BaseFilterBackend):
         proposal_id = request.query_params.get('proposal_id', None)
         if proposal_id:
             return queryset.filter(proposal=proposal_id)
+        return queryset
+
+
+class AssetRecordStatusFilterBackend(BaseFilterBackend):
+    def filter_queryset(self, request, queryset, view):
+        status_value = request.query_params.get('status')
+        if status_value in ['allowed', 'denied', 'unknown']:
+            return queryset.filter(status=status_value)
         return queryset
