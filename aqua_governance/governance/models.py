@@ -1,9 +1,8 @@
-from datetime import datetime
-
 import requests
 from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
 from django.db import models
+from django.utils import timezone
 
 from django_quill.fields import QuillField
 from model_utils import FieldTracker
@@ -125,7 +124,7 @@ class Proposal(models.Model):
                     created_at=self.last_updated_at,
                 )
                 self.payment_status = status
-                self.last_updated_at = datetime.now()
+                self.last_updated_at = timezone.now()
                 self.text = self.new_text
                 self.title = self.new_title
                 self.version = self.version + 1
@@ -152,7 +151,7 @@ class Proposal(models.Model):
                 )
                 self.payment_status = status
                 self.proposal_status = self.VOTING
-                self.last_updated_at = datetime.now()
+                self.last_updated_at = timezone.now()
                 self.start_at = self.new_start_at
                 self.end_at = self.new_end_at
                 self.transaction_hash = self.new_transaction_hash

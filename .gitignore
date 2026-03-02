@@ -5,6 +5,7 @@
 *.iml
 out
 gen
+temp
 
 ### Python template
 # Byte-compiled / optimized / DLL files
