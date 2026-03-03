@@ -12,7 +12,12 @@ from stellar_sdk import HashMemo, Server, TransactionEnvelope
 
 from aqua_governance.governance.models import LogVote, Proposal, HistoryProposal
 from aqua_governance.governance.serializer_fields import QuillField
-from aqua_governance.utils.payments import check_payment, check_xdr_payment, check_proposal_status
+from aqua_governance.utils.payments import (
+    check_payment,
+    check_xdr_payment,
+    check_proposal_status,
+    is_dev_payment_bypass_enabled,
+)
 
 
 class LogVoteSerializer(serializers.ModelSerializer):
@@ -75,6 +80,11 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         data = super(ProposalCreateSerializer, self).validate(data)
+        if is_dev_payment_bypass_enabled():
+            data['hide'] = False
+            data['status'] = Proposal.FINE
+            return data
+
         data['hide'] = True
 
         tx_hash = data.get('transaction_hash', None)
