@@ -436,7 +436,7 @@ Settings module defaults to `config.settings.dev`. Set `DJANGO_SETTINGS_MODULE` 
 
 ## 11. Related Docs
 
-External knowledge base at `~/dev/aquarius-knowledge/repos/aqua-governance/`:
+External knowledge base at `../aquarius-knowledge/repos/aqua-governance/`:
 - `Overview.md` — High-level project overview and tech stack
 - `Models.md` — Complete model field reference with constraints and behaviors
 - `Tasks.md` — Celery task details with pipeline diagrams
