@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from django.conf import settings
 
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
 
 from aqua_governance.governance.models import Proposal, HistoryProposal
 from aqua_governance.governance.serializer_fields import QuillField
@@ -21,7 +22,8 @@ class ProposalListSerializer(serializers.ModelSerializer):
             'is_simple_proposal', 'aqua_circulating_supply', 'proposal_status', 'payment_status',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'last_updated_at', 'created_at',
             'logvote_set', 'percent_for_quorum', 'ice_circulating_supply', 'vote_for_issuer', 'vote_against_issuer',
-            'abstain_issuer', 'vote_abstain_result'
+            'abstain_issuer', 'vote_abstain_result', 'onchain_action_type', 'onchain_action_args',
+            'onchain_execution_status', 'onchain_execution_tx_hash',
         ]
 
 
@@ -37,7 +39,8 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
             'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',
             'aqua_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
             'history_proposal', 'created_at', 'percent_for_quorum', 'ice_circulating_supply',
-            'abstain_issuer', 'vote_abstain_result'
+            'abstain_issuer', 'vote_abstain_result', 'onchain_action_type', 'onchain_action_args',
+            'onchain_execution_status', 'onchain_execution_tx_hash',
         ]
 
 
@@ -50,20 +53,35 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
             'discord_channel_name', 'discord_username', 'envelope_xdr', 'discord_channel_url',
+            'onchain_action_type', 'onchain_action_args',
+            'onchain_execution_status', 'onchain_execution_tx_hash',
             'proposal_status', 'payment_status', 'draft', 'last_updated_at', 'created_at',
         ]
         read_only_fields = [
             'proposal_status', 'payment_status', 'draft', 'start_at', 'end_at', 'last_updated_at', 'created_at',
             'discord_channel_name', 'discord_channel_url',
+            'onchain_execution_status', 'onchain_execution_tx_hash',
         ]
         extra_kwargs = {
             'envelope_xdr': {'required': True},
             'transaction_hash': {'required': True},
         }
 
+    def validate(self, attrs):
+        onchain_action_type = attrs.get('onchain_action_type', Proposal.ONCHAIN_ACTION_NONE)
+        onchain_action_args = attrs.get('onchain_action_args', [])
+        if onchain_action_type == Proposal.ONCHAIN_ACTION_NONE and onchain_action_args:
+            raise ValidationError({'onchain_action_args': 'Args must be empty when onchain action is NONE.'})
+        return attrs
+
     def create(self, validated_data):
         validated_data['draft'] = True
         validated_data['action'] = Proposal.TO_CREATE
+        validated_data.setdefault('onchain_action_args', [])
+        if validated_data.get('onchain_action_type', Proposal.ONCHAIN_ACTION_NONE) == Proposal.ONCHAIN_ACTION_NONE:
+            validated_data['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_NOT_REQUIRED
+        else:
+            validated_data['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_PENDING
         status = check_transaction_xdr(validated_data, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
         if status != Proposal.FINE:
             validated_data['hide'] = True
@@ -82,12 +100,16 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
             'id', 'version', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'envelope_xdr',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'onchain_action_type', 'onchain_action_args',
+            'onchain_execution_status', 'onchain_execution_tx_hash',
             'new_envelope_xdr', 'new_transaction_hash', 'new_title', 'new_text',
         ]
         read_only_fields = [
             'id', 'proposed_by', 'start_at', 'end_at', 'version', 'title', 'text',
             'discord_channel_url', 'discord_channel_name', 'discord_username',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'onchain_action_type', 'onchain_action_args',
+            'onchain_execution_status', 'onchain_execution_tx_hash',
         ]
         extra_kwargs = {
             'new_title': {'required': True},
@@ -116,12 +138,16 @@ class SubmitSerializer(serializers.ModelSerializer):
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'envelope_xdr',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'onchain_action_type', 'onchain_action_args',
+            'onchain_execution_status', 'onchain_execution_tx_hash',
             'new_start_at', 'new_end_at', 'new_envelope_xdr', 'new_transaction_hash',
         ]
         read_only_fields = [
             'id', 'proposed_by', 'title', 'text',
             'discord_channel_url', 'discord_channel_name', 'discord_username',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'onchain_action_type', 'onchain_action_args',
+            'onchain_execution_status', 'onchain_execution_tx_hash',
         ]
         extra_kwargs = {
             'new_start_at': {'required': True},

@@ -45,7 +45,8 @@ class ProposalListSerializer(serializers.ModelSerializer):
         model = Proposal
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'vote_for_result', 'vote_against_result',
-            'is_simple_proposal', 'aqua_circulating_supply', 'vote_abstain_result'
+            'is_simple_proposal', 'aqua_circulating_supply', 'vote_abstain_result',
+            'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
         ]
 
 
@@ -58,7 +59,8 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'is_simple_proposal',
             'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',
             'aqua_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
-            'abstain_issuer', 'vote_abstain_result'
+            'abstain_issuer', 'vote_abstain_result',
+            'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
         ]
 
 
