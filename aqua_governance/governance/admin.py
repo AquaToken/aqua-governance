@@ -7,6 +7,7 @@ from aqua_governance.governance.models import LogVote, Proposal
 @admin.register(Proposal)
 class ProposalAdmin(admin.ModelAdmin):
     list_display = [
+        'id',
         'proposed_by', 'hide', 'proposal_status', 'payment_status',
         'title', 'start_at', 'end_at', 'onchain_action_type', 'onchain_execution_status', '_list_display_quorum',
     ]

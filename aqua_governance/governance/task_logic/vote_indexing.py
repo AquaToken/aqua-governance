@@ -290,9 +290,14 @@ def reconcile_vote_group(
                 matched_existing_ids.add(existing_vote.id)
             matched_raw_indexes.add(raw_item["index"])
 
+    remaining_existing = [
+        vote
+        for vote in existing_votes
+        if vote.id is not None and vote.id not in matched_existing_ids
+    ]
     remaining_raw = [raw_item for raw_item in raw_items if raw_item["index"] not in matched_raw_indexes]
     unresolved_service_raw = [raw_item for raw_item in remaining_raw if not raw_item["self_sponsored"]]
-    if unresolved_service_raw:
+    if unresolved_service_raw and remaining_existing:
         logger.warning(
             "Proposal %s vote_key %s unresolved service-sponsored replacements (%s items). "
             "Keep existing votes and skip destructive reconciliation for this group.",
@@ -312,6 +317,9 @@ def reconcile_vote_group(
                 proposal=proposal,
                 vote_choice=raw_item["vote_choice"],
                 freezing_amount=freezing_amount,
+                horizon_server=horizon_server,
+                origin_cache=origin_cache,
+                restore_from_origin=not raw_item["self_sponsored"],
             )
             if new_vote is None:
                 logger.warning("Error create vote for %s, %s", vote_key, raw_item["index"])
@@ -422,20 +430,60 @@ def _make_new_vote(
     proposal: Proposal,
     vote_choice: str,
     freezing_amount: bool,
+    horizon_server: Optional[Server] = None,
+    origin_cache: Optional[dict[str, Optional[str]]] = None,
+    restore_from_origin: bool = False,
 ):
     balance_id = claimable_balance['id']
     original_amount = None
     created_at = None
-    horizon_server = Server(settings.HORIZON_URL)
+    metadata_balance_id = balance_id
+    server = horizon_server if horizon_server is not None else Server(settings.HORIZON_URL)
+
+    if restore_from_origin and horizon_server is not None:
+        if origin_cache is None:
+            origin_cache = {}
+        origin_balance_id = _resolve_origin_balance_id(
+            horizon_server=horizon_server,
+            balance_id=balance_id,
+            origin_cache=origin_cache,
+        )
+        if origin_balance_id:
+            metadata_balance_id = origin_balance_id
 
     try:
-        ops = horizon_server.operations().for_claimable_balance(balance_id).order(desc=False).limit(50).call()
+        ops = server.operations().for_claimable_balance(metadata_balance_id).order(desc=False).limit(50).call()
         for record in ops["_embedded"]["records"]:
             if record['type'] == 'create_claimable_balance':
                 created_at = str(date_parse(record["created_at"]))
                 original_amount = str(record["amount"])
     except NotFoundError:
-        created_at = claimable_balance['last_modified_time']
+        if metadata_balance_id == balance_id:
+            created_at = claimable_balance['last_modified_time']
+    except Exception:
+        logger.warning(
+            "Error loading create_claimable_balance metadata for balance %s (metadata source %s)",
+            balance_id,
+            metadata_balance_id,
+            exc_info=sys.exc_info(),
+        )
+
+    # Fallback to current balance metadata if origin lookup has no create op.
+    if (created_at is None or original_amount is None) and metadata_balance_id != balance_id:
+        try:
+            ops = server.operations().for_claimable_balance(balance_id).order(desc=False).limit(50).call()
+            for record in ops["_embedded"]["records"]:
+                if record['type'] == 'create_claimable_balance':
+                    created_at = created_at or str(date_parse(record["created_at"]))
+                    original_amount = original_amount or str(record["amount"])
+        except NotFoundError:
+            created_at = created_at or claimable_balance['last_modified_time']
+        except Exception:
+            logger.warning(
+                "Error loading fallback create_claimable_balance metadata for balance %s",
+                balance_id,
+                exc_info=sys.exc_info(),
+            )
 
     if created_at is None:
         created_at = str(proposal.created_at)

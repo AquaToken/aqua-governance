@@ -72,6 +72,8 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         onchain_action_args = attrs.get('onchain_action_args', [])
         if onchain_action_type == Proposal.ONCHAIN_ACTION_NONE and onchain_action_args:
             raise ValidationError({'onchain_action_args': 'Args must be empty when onchain action is NONE.'})
+        if onchain_action_type != Proposal.ONCHAIN_ACTION_NONE and not onchain_action_args:
+            raise ValidationError({'onchain_action_args': 'Args are required for selected onchain action.'})
         return attrs
 
     def create(self, validated_data):
