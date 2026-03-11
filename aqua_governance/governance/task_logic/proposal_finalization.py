@@ -118,12 +118,13 @@ def _execute_onchain_action_if_needed(proposal: Proposal) -> None:
         tx_hash = execute_onchain_action(proposal)
         if not tx_hash:
             raise ValueError("Onchain hook returned empty transaction hash")
-    except Exception:
+    except Exception as e:
         # TODO: Add retries/backoff/manual re-run strategy for failed onchain execution.
         logger.exception(
             "Onchain hook execution failed for proposal %s (action=%s)",
             proposal.id,
             proposal.onchain_action_type,
+            exc_info=e,
         )
         proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_FAILED
         with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
