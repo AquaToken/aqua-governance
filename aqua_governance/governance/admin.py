@@ -47,17 +47,52 @@ class ProposalAdmin(admin.ModelAdmin):
 
 @admin.register(LogVote)
 class LogVoteAdmin(admin.ModelAdmin):
-    list_display = ['asset_code', 'amount', 'vote_choice', 'created_at']
+    list_display = [
+        'id',
+        'asset_code',
+        'vote_choice',
+        'amount',
+        'original_amount',
+        'voted_amount',
+        'group_index',
+        'claimed',
+        'hide',
+        'created_at',
+        'proposal',
+        'account_issuer',
+        'claimable_balance_id',
+    ]
     readonly_fields = [
+        'id',
         'asset_code',
-        'claimable_balance_id', 'transaction_link', 'account_issuer', 'amount', 'proposal', 'vote_choice', 'created_at',
+        'claimable_balance_id',
+        'transaction_link',
+        'account_issuer',
+        'proposal',
+        'vote_choice',
+        'created_at',
+        'key',
+        'group_index',
+        'amount',
+        'original_amount',
+        'voted_amount',
+        'claimed',
+        'hide',
     ]
-    search_fields = ['proposal__id', 'proposal__vote_for_issuer', 'proposal__vote_against_issuer', 'proposal__abstain_issuer']
-    fields = [
-        'asset_code',
-        'claimable_balance_id', 'transaction_link', 'account_issuer', 'amount', 'proposal', 'vote_choice', 'created_at',
+    search_fields = [
+        '=id',
+        'claimable_balance_id',
+        'account_issuer',
+        'key',
+        '=proposal__id',
+        'proposal__vote_for_issuer',
+        'proposal__vote_against_issuer',
+        'proposal__abstain_issuer',
     ]
-    list_filter = ('vote_choice', 'claimed')
+    fields = readonly_fields
+    list_filter = ('vote_choice', 'asset_code', 'claimed', 'hide')
+    ordering = ('-created_at',)
+    list_select_related = ('proposal',)
 
     def has_change_permission(self, request, obj=None):
         return False

@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 
 from django.conf import settings
 from django.db.models import Prefetch
 from django.http import Http404
+from django.utils import timezone
 from rest_framework import exceptions
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import get_object_or_404
@@ -29,8 +30,12 @@ from aqua_governance.governance import serializers_v2
 
 
 class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, GenericViewSet):
-    queryset = Proposal.objects.filter(hide=False, draft=False, created_at__lte=datetime(2022, 4, 15)).prefetch_related(
-        Prefetch('logvote_set', LogVote.objects.all().order_by('-created_at')),
+    queryset = Proposal.objects.filter(
+        hide=False,
+        draft=False,
+        created_at__lte=datetime(2022, 4, 15, tzinfo=dt_timezone.utc),
+    ).prefetch_related(
+        Prefetch('logvote_set', LogVote.objects.filter(hide=False).order_by('-created_at')),
     )
     permission_classes = (AllowAny, )
     serializer_class = ProposalListSerializer
@@ -90,7 +95,8 @@ class ProposalViewSet(
 
         if self.action == 'submit_proposal':
             queryset = queryset.filter(
-                proposal_status=Proposal.DISCUSSION, last_updated_at__lte=datetime.now() - settings.DISCUSSION_TIME,
+                proposal_status=Proposal.DISCUSSION,
+                last_updated_at__lte=timezone.now() - settings.DISCUSSION_TIME,
             )
 
         if self.action == 'update' or self.action == 'partial_update':
