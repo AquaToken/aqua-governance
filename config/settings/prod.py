@@ -84,5 +84,4 @@ if SENTRY_ENABLED:
 # Horizon configuration
 # --------------------------------------------------------------------------
 
-STELLAR_PASSPHRASE = 'Public Global Stellar Network ; September 2015'
-HORIZON_URL = 'https://horizon.stellar.org'
+HORIZON_URL = env('HORIZON_URL', default='https://horizon.stellar.org')
