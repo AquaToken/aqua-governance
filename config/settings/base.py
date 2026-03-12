@@ -141,7 +141,7 @@ SITE_ID = 1
 # --------------------------------------------------------------------------
 
 STATIC_URL = '/static/'
-STATIC_ROOT = root('static')
+STATIC_ROOT = env('STATIC_ROOT', default=root('static'))
 
 STATICFILES_FINDERS = (
     'django.contrib.staticfiles.finders.AppDirectoriesFinder',
