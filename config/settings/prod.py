@@ -70,9 +70,12 @@ if CELERY_ENABLED:
 SENTRY_DSN = env('SENTRY_DSN', default='')
 SENTRY_ENABLED = True if SENTRY_DSN else False
 
+SENTRY_ENVIRONMENT = env('SENTRY_ENVIRONMENT', default='production')
+
 if SENTRY_ENABLED:
     sentry_sdk.init(
         SENTRY_DSN,
+        environment=SENTRY_ENVIRONMENT,
         traces_sample_rate=0.2,
         integrations=[DjangoIntegration(), CeleryIntegration()],
     )
