@@ -13,6 +13,8 @@ apps_root = root.path('aqua_governance')
 
 BASE_DIR = root()
 
+environ.Env.read_env()
+
 
 # Base configurations
 # --------------------------------------------------------------------------

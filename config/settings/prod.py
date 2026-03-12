@@ -6,9 +6,6 @@ from sentry_sdk.integrations.django import DjangoIntegration
 from config.settings.base import *  # noqa: F403
 
 
-environ.Env.read_env()
-
-
 DEBUG = False
 
 ADMINS = env.json('ADMINS')
