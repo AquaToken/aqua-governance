@@ -56,6 +56,28 @@ class Proposal(models.Model):
         (NONE, 'None'),
     )
 
+    ONCHAIN_ACTION_NONE = 'NONE'
+    ONCHAIN_ACTION_ADD_ASSET = 'ADD_ASSET'
+    ONCHAIN_ACTION_REMOVE_ASSET = 'REMOVE_ASSET'
+    ONCHAIN_ACTION_CHOICES = (
+        (ONCHAIN_ACTION_NONE, 'No onchain action'),
+        (ONCHAIN_ACTION_ADD_ASSET, 'Add asset'),
+        (ONCHAIN_ACTION_REMOVE_ASSET, 'Remove asset'),
+    )
+
+    ONCHAIN_EXECUTION_NOT_REQUIRED = 'NOT_REQUIRED'
+    ONCHAIN_EXECUTION_PENDING = 'PENDING'
+    ONCHAIN_EXECUTION_SUCCESS = 'SUCCESS'
+    ONCHAIN_EXECUTION_FAILED = 'FAILED'
+    ONCHAIN_EXECUTION_SKIPPED = 'SKIPPED'
+    ONCHAIN_EXECUTION_STATUS_CHOICES = (
+        (ONCHAIN_EXECUTION_NOT_REQUIRED, 'No execution required'),
+        (ONCHAIN_EXECUTION_PENDING, 'Pending execution'),
+        (ONCHAIN_EXECUTION_SUCCESS, 'Execution succeeded'),
+        (ONCHAIN_EXECUTION_FAILED, 'Execution failed'),
+        (ONCHAIN_EXECUTION_SKIPPED, 'Execution skipped'),
+    )
+
     proposed_by = models.CharField(max_length=56)
     title = models.CharField(max_length=256)
     text = QuillField()
@@ -101,6 +123,22 @@ class Proposal(models.Model):
     new_end_at = models.DateTimeField(null=True, blank=True)
 
     action = models.CharField(choices=PROPOSAL_ACTION_CHOICES, max_length=64, default=NONE)
+    onchain_action_type = models.CharField(
+        choices=ONCHAIN_ACTION_CHOICES,
+        max_length=64,
+        default=ONCHAIN_ACTION_NONE,
+    )
+    onchain_action_args = ArrayField(
+        base_field=models.TextField(),
+        blank=True,
+        default=list,
+    )
+    onchain_execution_status = models.CharField(
+        choices=ONCHAIN_EXECUTION_STATUS_CHOICES,
+        max_length=32,
+        default=ONCHAIN_EXECUTION_NOT_REQUIRED,
+    )
+    onchain_execution_tx_hash = models.CharField(max_length=128, null=True, blank=True)
 
     voting_time_tracker = FieldTracker(fields=['end_at'])
 
@@ -184,6 +222,18 @@ class Proposal(models.Model):
         if not self.abstain_issuer:
             keypair = Keypair.random()
             self.abstain_issuer = keypair.public_key
+
+        if self.onchain_action_type == self.ONCHAIN_ACTION_NONE:
+            if (
+                self.onchain_execution_status == self.ONCHAIN_EXECUTION_PENDING
+                and not self.onchain_execution_tx_hash
+            ):
+                self.onchain_execution_status = self.ONCHAIN_EXECUTION_NOT_REQUIRED
+        elif (
+            self.onchain_execution_status == self.ONCHAIN_EXECUTION_NOT_REQUIRED
+            and not self.onchain_execution_tx_hash
+        ):
+            self.onchain_execution_status = self.ONCHAIN_EXECUTION_PENDING
 
         if not self.pk:
             # AQUA voting is deprecated: keep denominator based on ICE only for new proposals.

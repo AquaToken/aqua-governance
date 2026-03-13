@@ -7,13 +7,14 @@ from aqua_governance.governance.models import LogVote, Proposal
 @admin.register(Proposal)
 class ProposalAdmin(admin.ModelAdmin):
     list_display = [
+        'id',
         'proposed_by', 'hide', 'proposal_status', 'payment_status',
-        'title', 'start_at', 'end_at', '_list_display_quorum',
+        'title', 'start_at', 'end_at', 'onchain_action_type', 'onchain_execution_status', '_list_display_quorum',
     ]
     readonly_fields = [
         'vote_for_issuer', 'vote_against_issuer', 'abstain_issuer', 'version',
         'vote_for_result', 'vote_against_result', 'vote_abstain_result', 'aqua_circulating_supply', 'ice_circulating_supply',
-        'payment_status',
+        'payment_status', 'onchain_execution_status', 'onchain_execution_tx_hash',
     ]
     search_fields = ['proposed_by']
     fields = [
@@ -21,6 +22,7 @@ class ProposalAdmin(admin.ModelAdmin):
         'proposal_status', 'payment_status', 'version', 'start_at', 'end_at', 'hide',
         'vote_for_result', 'vote_against_result', 'vote_abstain_result', 'aqua_circulating_supply',
         'ice_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
+        'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
     ]
     list_filter = ('start_at', 'end_at')
     form = ProposalAdminForm
