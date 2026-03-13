@@ -2,11 +2,12 @@ import time
 from typing import Optional
 
 from django.conf import settings
-from stellar_sdk import Address, Keypair, SorobanServer, TransactionBuilder, scval
+from stellar_sdk import Keypair, SorobanServer, TransactionBuilder, scval
 from stellar_sdk.exceptions import PrepareTransactionException
 from stellar_sdk.soroban_rpc import GetTransactionStatus, SendTransactionStatus
 
 from aqua_governance.governance.models import Proposal
+from aqua_governance.governance.onchain_hooks.validators import normalize_asset_addresses
 
 
 def execute_asset_registry_action(proposal: Proposal, args: list[str], allowed: bool) -> Optional[str]:
@@ -16,7 +17,7 @@ def execute_asset_registry_action(proposal: Proposal, args: list[str], allowed: 
 
     manager_keypair = Keypair.from_secret(manager_secret)
     manager_address = manager_keypair.public_key
-    assets = _normalize_asset_addresses(args)
+    assets = normalize_asset_addresses(args)
     meta_hash = _build_empty_meta_hash()
 
     server = SorobanServer(rpc_url)
@@ -81,23 +82,6 @@ def execute_asset_registry_action(proposal: Proposal, args: list[str], allowed: 
         time.sleep(poll_interval)
 
     raise RuntimeError(f"Soroban transaction confirmation timeout. hash={tx_hash}")
-
-
-def _normalize_asset_addresses(args: list[str]) -> list[str]:
-    if not args:
-        raise ValueError("onchain_action_args must contain at least one asset address.")
-
-    normalized_assets: list[str] = []
-    for raw_value in args:
-        value = str(raw_value).strip()
-        if not value:
-            raise ValueError("onchain_action_args contains an empty asset address.")
-
-        # Validate Soroban address format early to fail fast before tx simulation.
-        Address(value)
-        normalized_assets.append(value)
-
-    return normalized_assets
 
 
 def _build_empty_meta_hash() -> bytes:

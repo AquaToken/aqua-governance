@@ -6,6 +6,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
 from aqua_governance.governance.models import Proposal, HistoryProposal
+from aqua_governance.governance.onchain_hooks.validators import normalize_asset_addresses
 from aqua_governance.governance.serializer_fields import QuillField
 from aqua_governance.governance.serializers import HistoryProposalSerializer,LogVoteSerializer
 from aqua_governance.utils.payments import check_transaction_xdr
@@ -74,6 +75,14 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
             raise ValidationError({'onchain_action_args': 'Args must be empty when onchain action is NONE.'})
         if onchain_action_type != Proposal.ONCHAIN_ACTION_NONE and not onchain_action_args:
             raise ValidationError({'onchain_action_args': 'Args are required for selected onchain action.'})
+        if onchain_action_type in (
+            Proposal.ONCHAIN_ACTION_ADD_ASSET,
+            Proposal.ONCHAIN_ACTION_REMOVE_ASSET,
+        ):
+            try:
+                attrs['onchain_action_args'] = normalize_asset_addresses(onchain_action_args)
+            except ValueError as exc:
+                raise ValidationError({'onchain_action_args': str(exc)}) from exc
         return attrs
 
     def create(self, validated_data):

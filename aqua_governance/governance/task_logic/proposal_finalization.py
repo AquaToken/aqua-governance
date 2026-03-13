@@ -128,7 +128,6 @@ def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: 
 
         if proposal.onchain_execution_status in (
             Proposal.ONCHAIN_EXECUTION_SUCCESS,
-            Proposal.ONCHAIN_EXECUTION_FAILED,
             Proposal.ONCHAIN_EXECUTION_SKIPPED,
         ):
             return
@@ -171,8 +170,9 @@ def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: 
                 proposal.onchain_action_type,
             )
             proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_FAILED
+            proposal.onchain_execution_tx_hash = None
             with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-                proposal.save(update_fields=['onchain_execution_status'])
+                proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
             return
 
         proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_SUCCESS
