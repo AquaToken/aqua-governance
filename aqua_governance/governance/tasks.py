@@ -60,6 +60,7 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
     """
     Update votes for proposal.
     """
+    should_refresh_final_results = proposal_id is None
     if proposal_id is None:
         proposals = Proposal.objects.filter(proposal_status__in=[Proposal.VOTED]).order_by("-id")
     else:
@@ -73,6 +74,8 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
             horizon_server=horizon_server,
             freezing_amount=freezing_amount,
         )
+        if should_refresh_final_results and proposal.proposal_status == Proposal.VOTED:
+            update_proposal_final_results(proposal.id)
 
 
 @celery_app.task(ignore_result=True)

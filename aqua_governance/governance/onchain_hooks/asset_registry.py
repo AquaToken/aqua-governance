@@ -1,3 +1,4 @@
+import logging
 import time
 from typing import Optional
 
@@ -8,6 +9,9 @@ from stellar_sdk.soroban_rpc import GetTransactionStatus, SendTransactionStatus
 
 from aqua_governance.governance.models import Proposal
 from aqua_governance.governance.onchain_hooks.validators import normalize_asset_addresses
+
+
+logger = logging.getLogger(__name__)
 
 
 def execute_asset_registry_action(proposal: Proposal, args: list[str], allowed: bool) -> Optional[str]:
@@ -21,8 +25,6 @@ def execute_asset_registry_action(proposal: Proposal, args: list[str], allowed: 
     meta_hash = _build_empty_meta_hash()
 
     server = SorobanServer(rpc_url)
-    source_account = server.load_account(manager_address)
-
     actions = [
         scval.to_struct({
             "asset": scval.to_address(asset_address),
@@ -36,7 +38,74 @@ def execute_asset_registry_action(proposal: Proposal, args: list[str], allowed: 
         scval.to_vec(actions),
         scval.to_bytes(meta_hash),
     ]
+    tx_hash = _send_execute_proposal_transaction(
+        server=server,
+        manager_address=manager_address,
+        manager_keypair=manager_keypair,
+        contract_id=contract_id,
+        parameters=parameters,
+        proposal_id=proposal.id,
+    )
+    max_polls = settings.ONCHAIN_TX_MAX_POLLS
+    poll_interval = settings.ONCHAIN_TX_POLL_INTERVAL_SECONDS
 
+    for _ in range(max_polls):
+        get_result = server.get_transaction(tx_hash)
+        if get_result.status == GetTransactionStatus.SUCCESS:
+            return tx_hash
+        if get_result.status == GetTransactionStatus.FAILED:
+            raise RuntimeError(
+                f"Soroban transaction failed. hash={tx_hash} result_xdr={get_result.result_xdr}",
+            )
+        time.sleep(poll_interval)
+
+    raise RuntimeError(f"Soroban transaction confirmation timeout. hash={tx_hash}")
+
+
+def _send_execute_proposal_transaction(
+    server: SorobanServer,
+    manager_address: str,
+    manager_keypair: Keypair,
+    contract_id: str,
+    parameters: list,
+    proposal_id: int,
+) -> str:
+    send_result = None
+
+    for attempt in range(2):
+        prepared_transaction = _prepare_execute_proposal_transaction(
+            server=server,
+            manager_address=manager_address,
+            manager_keypair=manager_keypair,
+            contract_id=contract_id,
+            parameters=parameters,
+        )
+        send_result = server.send_transaction(prepared_transaction)
+        if send_result.status != SendTransactionStatus.ERROR:
+            return send_result.hash
+
+        if attempt == 0:
+            logger.warning(
+                "Soroban send failed for proposal %s on first attempt; retrying with refreshed sequence. "
+                "hash=%s error_xdr=%s",
+                proposal_id,
+                send_result.hash,
+                send_result.error_result_xdr,
+            )
+
+    raise RuntimeError(
+        f"Soroban send failed after retry. hash={send_result.hash} error_xdr={send_result.error_result_xdr}",
+    )
+
+
+def _prepare_execute_proposal_transaction(
+    server: SorobanServer,
+    manager_address: str,
+    manager_keypair: Keypair,
+    contract_id: str,
+    parameters: list,
+):
+    source_account = server.load_account(manager_address)
     transaction = (
         TransactionBuilder(
             source_account,
@@ -61,27 +130,7 @@ def execute_asset_registry_action(proposal: Proposal, args: list[str], allowed: 
         ) from exc
 
     prepared_transaction.sign(manager_keypair)
-    send_result = server.send_transaction(prepared_transaction)
-    if send_result.status == SendTransactionStatus.ERROR:
-        raise RuntimeError(
-            f"Soroban send failed. hash={send_result.hash} error_xdr={send_result.error_result_xdr}",
-        )
-
-    tx_hash = send_result.hash
-    max_polls = settings.ONCHAIN_TX_MAX_POLLS
-    poll_interval = settings.ONCHAIN_TX_POLL_INTERVAL_SECONDS
-
-    for _ in range(max_polls):
-        get_result = server.get_transaction(tx_hash)
-        if get_result.status == GetTransactionStatus.SUCCESS:
-            return tx_hash
-        if get_result.status == GetTransactionStatus.FAILED:
-            raise RuntimeError(
-                f"Soroban transaction failed. hash={tx_hash} result_xdr={get_result.result_xdr}",
-            )
-        time.sleep(poll_interval)
-
-    raise RuntimeError(f"Soroban transaction confirmation timeout. hash={tx_hash}")
+    return prepared_transaction
 
 
 def _build_empty_meta_hash() -> bytes:

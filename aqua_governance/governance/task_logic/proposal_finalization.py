@@ -126,10 +126,9 @@ def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: 
         if proposal.proposal_status != Proposal.VOTED:
             return
 
-        if proposal.onchain_execution_status in (
-            Proposal.ONCHAIN_EXECUTION_SUCCESS,
-            Proposal.ONCHAIN_EXECUTION_SKIPPED,
-        ):
+        # Only a confirmed onchain success is terminal. FAILED/SKIPPED may become
+        # executable later after external retries or delayed vote indexing.
+        if proposal.onchain_execution_status == Proposal.ONCHAIN_EXECUTION_SUCCESS:
             return
 
         if not has_fresh_ice_supply:
