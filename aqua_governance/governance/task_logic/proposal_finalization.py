@@ -4,6 +4,7 @@ from typing import Any
 
 import requests
 from django.conf import settings
+from django.db import transaction
 
 from aqua_governance.governance.models import LogVote, Proposal
 from aqua_governance.governance.onchain_hooks import execute_onchain_action
@@ -43,14 +44,42 @@ def update_proposal_final_results(proposal_id: int) -> None:
     proposal.vote_against_result = vote_against_result
     proposal.vote_abstain_result = vote_abstain_result
 
-    response = requests.get(settings.ICE_CIRCULATING_URL)
-    if response.status_code == 200:
-        proposal.ice_circulating_supply = float(response.json()['ice_supply_amount'])
+    has_fresh_ice_supply = _update_ice_circulating_supply(proposal)
 
     with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
         proposal.save(update_fields=['vote_for_result', 'vote_against_result', 'vote_abstain_result',
                                      'ice_circulating_supply'])
-    _execute_onchain_action_if_needed(proposal)
+    _execute_onchain_action_if_needed(proposal, has_fresh_ice_supply=has_fresh_ice_supply)
+
+
+def _update_ice_circulating_supply(proposal: Proposal) -> bool:
+    try:
+        response = requests.get(settings.ICE_CIRCULATING_URL, timeout=10)
+    except requests.RequestException:
+        logger.exception(
+            "Failed to fetch ICE circulating supply for proposal %s.",
+            proposal.id,
+        )
+        return False
+
+    if response.status_code != 200:
+        logger.error(
+            "ICE supply fetch returned non-200 status for proposal %s: %s",
+            proposal.id,
+            response.status_code,
+        )
+        return False
+
+    try:
+        proposal.ice_circulating_supply = float(response.json()['ice_supply_amount'])
+    except (KeyError, TypeError, ValueError):
+        logger.exception(
+            "Failed to parse ICE circulating supply payload for proposal %s.",
+            proposal.id,
+        )
+        return False
+
+    return True
 
 
 def _as_decimal(value: Any) -> Decimal:
@@ -79,59 +108,74 @@ def _is_proposal_approved(proposal: Proposal) -> bool:
     return _as_decimal(proposal.vote_for_result) > _as_decimal(proposal.vote_against_result)
 
 
-def _execute_onchain_action_if_needed(proposal: Proposal) -> None:
-    if proposal.onchain_action_type == Proposal.ONCHAIN_ACTION_NONE:
-        if (
-            proposal.onchain_execution_status != Proposal.ONCHAIN_EXECUTION_NOT_REQUIRED
-            or proposal.onchain_execution_tx_hash
+def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: bool) -> None:
+    with transaction.atomic():
+        proposal = Proposal.objects.select_for_update().get(id=proposal.id)
+
+        if proposal.onchain_action_type == Proposal.ONCHAIN_ACTION_NONE:
+            if (
+                proposal.onchain_execution_status != Proposal.ONCHAIN_EXECUTION_NOT_REQUIRED
+                or proposal.onchain_execution_tx_hash
+            ):
+                proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_NOT_REQUIRED
+                proposal.onchain_execution_tx_hash = None
+                with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
+                    proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
+            return
+
+        if proposal.proposal_status != Proposal.VOTED:
+            return
+
+        if proposal.onchain_execution_status in (
+            Proposal.ONCHAIN_EXECUTION_SUCCESS,
+            Proposal.ONCHAIN_EXECUTION_FAILED,
+            Proposal.ONCHAIN_EXECUTION_SKIPPED,
         ):
-            proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_NOT_REQUIRED
+            return
+
+        if not has_fresh_ice_supply:
+            logger.error(
+                "Skip onchain action for proposal %s due to stale or missing ICE supply.",
+                proposal.id,
+            )
+            proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_FAILED
             proposal.onchain_execution_tx_hash = None
             with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
                 proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
-        return
+            return
 
-    if proposal.proposal_status != Proposal.VOTED:
-        return
+        is_approved = _is_proposal_approved(proposal)
+        has_quorum = _has_proposal_quorum(proposal)
+        if not is_approved or not has_quorum:
+            proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_SKIPPED
+            proposal.onchain_execution_tx_hash = None
+            logger.info(
+                "Skip onchain action for proposal %s due to result check. approved=%s quorum=%s",
+                proposal.id,
+                is_approved,
+                has_quorum,
+            )
+            with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
+                proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
+            return
 
-    if proposal.onchain_execution_status in (
-        Proposal.ONCHAIN_EXECUTION_SUCCESS,
-        Proposal.ONCHAIN_EXECUTION_FAILED,
-        Proposal.ONCHAIN_EXECUTION_SKIPPED,
-    ):
-        return
+        try:
+            tx_hash = execute_onchain_action(proposal)
+            if not tx_hash:
+                raise ValueError("Onchain hook returned empty transaction hash")
+        except Exception:
+            # TODO: Add retries/backoff/manual re-run strategy for failed onchain execution.
+            logger.exception(
+                "Onchain hook execution failed for proposal %s (action=%s)",
+                proposal.id,
+                proposal.onchain_action_type,
+            )
+            proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_FAILED
+            with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
+                proposal.save(update_fields=['onchain_execution_status'])
+            return
 
-    if not _is_proposal_approved(proposal) or not _has_proposal_quorum(proposal):
-        proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_SKIPPED
-        proposal.onchain_execution_tx_hash = None
-        logger.info(
-            "Skip onchain action for proposal %s due to result check. approved=%s quorum=%s",
-            proposal.id,
-            _is_proposal_approved(proposal),
-            _has_proposal_quorum(proposal),
-        )
+        proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_SUCCESS
+        proposal.onchain_execution_tx_hash = tx_hash
         with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
             proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
-        return
-
-    try:
-        tx_hash = execute_onchain_action(proposal)
-        if not tx_hash:
-            raise ValueError("Onchain hook returned empty transaction hash")
-    except Exception as e:
-        # TODO: Add retries/backoff/manual re-run strategy for failed onchain execution.
-        logger.exception(
-            "Onchain hook execution failed for proposal %s (action=%s)",
-            proposal.id,
-            proposal.onchain_action_type,
-            exc_info=e,
-        )
-        proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_FAILED
-        with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-            proposal.save(update_fields=['onchain_execution_status'])
-        return
-
-    proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_SUCCESS
-    proposal.onchain_execution_tx_hash = tx_hash
-    with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-        proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
