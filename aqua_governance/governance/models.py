@@ -56,6 +56,13 @@ class Proposal(models.Model):
         (NONE, 'None'),
     )
 
+    PROPOSAL_TYPE_GENERAL = 'GENERAL'
+    PROPOSAL_TYPE_ASSET = 'ASSET'
+    PROPOSAL_TYPE_CHOICES = (
+        (PROPOSAL_TYPE_GENERAL, 'General proposal'),
+        (PROPOSAL_TYPE_ASSET, 'Asset proposal'),
+    )
+
     ONCHAIN_ACTION_NONE = 'NONE'
     ONCHAIN_ACTION_ADD_ASSET = 'ADD_ASSET'
     ONCHAIN_ACTION_REMOVE_ASSET = 'REMOVE_ASSET'
@@ -67,12 +74,16 @@ class Proposal(models.Model):
 
     ONCHAIN_EXECUTION_NOT_REQUIRED = 'NOT_REQUIRED'
     ONCHAIN_EXECUTION_PENDING = 'PENDING'
+    ONCHAIN_EXECUTION_IN_PROGRESS = 'IN_PROGRESS'
+    ONCHAIN_EXECUTION_SUBMITTED = 'SUBMITTED'
     ONCHAIN_EXECUTION_SUCCESS = 'SUCCESS'
     ONCHAIN_EXECUTION_FAILED = 'FAILED'
     ONCHAIN_EXECUTION_SKIPPED = 'SKIPPED'
     ONCHAIN_EXECUTION_STATUS_CHOICES = (
         (ONCHAIN_EXECUTION_NOT_REQUIRED, 'No execution required'),
         (ONCHAIN_EXECUTION_PENDING, 'Pending execution'),
+        (ONCHAIN_EXECUTION_IN_PROGRESS, 'Execution in progress'),
+        (ONCHAIN_EXECUTION_SUBMITTED, 'Transaction submitted'),
         (ONCHAIN_EXECUTION_SUCCESS, 'Execution succeeded'),
         (ONCHAIN_EXECUTION_FAILED, 'Execution failed'),
         (ONCHAIN_EXECUTION_SKIPPED, 'Execution skipped'),
@@ -122,7 +133,30 @@ class Proposal(models.Model):
     new_start_at = models.DateTimeField(null=True, blank=True)
     new_end_at = models.DateTimeField(null=True, blank=True)
 
+    proposal_type = models.CharField(
+        choices=PROPOSAL_TYPE_CHOICES,
+        max_length=32,
+        default=PROPOSAL_TYPE_GENERAL,
+        db_index=True,
+    )
     action = models.CharField(choices=PROPOSAL_ACTION_CHOICES, max_length=64, default=NONE)
+
+    # Asset proposal payload (section 5). Mandatory only for proposal_type=ASSET.
+    asset_code = models.CharField(max_length=64, null=True, blank=True)
+    asset_issuer = models.CharField(max_length=56, null=True, blank=True)
+    asset_contract_address = models.CharField(max_length=128, null=True, blank=True)
+    asset_issuer_information = models.TextField(null=True, blank=True)
+    asset_token_description = models.TextField(null=True, blank=True)
+    asset_holder_distribution = models.TextField(null=True, blank=True)
+    asset_liquidity = models.TextField(null=True, blank=True)
+    asset_trading_volume = models.TextField(null=True, blank=True)
+    asset_audit_info = models.TextField(null=True, blank=True)
+    asset_stellar_flags = models.TextField(null=True, blank=True)
+    asset_related_projects = models.TextField(null=True, blank=True)
+    asset_community_references = models.TextField(null=True, blank=True)
+    asset_aquarius_traction = models.TextField(null=True, blank=True)
+    asset_issuer_commitments = models.TextField(null=True, blank=True)
+
     onchain_action_type = models.CharField(
         choices=ONCHAIN_ACTION_CHOICES,
         max_length=64,
@@ -225,10 +259,11 @@ class Proposal(models.Model):
 
         if self.onchain_action_type == self.ONCHAIN_ACTION_NONE:
             if (
-                self.onchain_execution_status == self.ONCHAIN_EXECUTION_PENDING
-                and not self.onchain_execution_tx_hash
+                self.onchain_execution_status != self.ONCHAIN_EXECUTION_NOT_REQUIRED
+                or self.onchain_execution_tx_hash
             ):
                 self.onchain_execution_status = self.ONCHAIN_EXECUTION_NOT_REQUIRED
+                self.onchain_execution_tx_hash = None
         elif (
             self.onchain_execution_status == self.ONCHAIN_EXECUTION_NOT_REQUIRED
             and not self.onchain_execution_tx_hash

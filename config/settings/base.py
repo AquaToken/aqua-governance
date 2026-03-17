@@ -228,18 +228,10 @@ PROPOSAL_CREATE_OR_UPDATE_COST = env.int('PROPOSAL_CREATE_OR_UPDATE_COST', defau
 
 EXPIRED_TIME = timedelta(days=env.int('EXPIRED_TIME_DAYS', default=30))
 DISCUSSION_TIME = timedelta(days=env.int('DISCUSSION_TIME_DAYS', default=7))
+DEFAULT_MIN_VOTING_DURATION_DAYS = env.int('DEFAULT_MIN_VOTING_DURATION_DAYS', default=7)
+ASSET_MIN_VOTING_DURATION_DAYS = env.int('ASSET_MIN_VOTING_DURATION_DAYS', default=10)
 HORIZON_URL = env('HORIZON_URL', default='https://horizon.stellar.org')
 NETWORK_PASSPHRASE = env('NETWORK_PASSPHRASE', default=Network.public_network().network_passphrase)
-
-# Soroban / onchain hooks
-# --------------------------------------------------------------------------
-SOROBAN_RPC_URL = env('SOROBAN_RPC_URL', default='')
-ONCHAIN_ASSET_REGISTRY_CONTRACT_ID = env('ONCHAIN_ASSET_REGISTRY_CONTRACT_ID', default='')
-ONCHAIN_ASSET_REGISTRY_MANAGER_SECRET = env('ONCHAIN_ASSET_REGISTRY_MANAGER_SECRET', default='')
-ONCHAIN_SOROBAN_BASE_FEE = env.int('ONCHAIN_SOROBAN_BASE_FEE', default=100000)
-ONCHAIN_SOROBAN_TIMEOUT = env.int('ONCHAIN_SOROBAN_TIMEOUT', default=120)
-ONCHAIN_TX_MAX_POLLS = env.int('ONCHAIN_TX_MAX_POLLS', default=20)
-ONCHAIN_TX_POLL_INTERVAL_SECONDS = env.int('ONCHAIN_TX_POLL_INTERVAL_SECONDS', default=3)
 
 # Soroban / onchain hooks
 # --------------------------------------------------------------------------

@@ -9,7 +9,8 @@ class ProposalAdmin(admin.ModelAdmin):
     list_display = [
         'id',
         'proposed_by', 'hide', 'proposal_status', 'payment_status',
-        'title', 'start_at', 'end_at', 'onchain_action_type', 'onchain_execution_status', '_list_display_quorum',
+        'title', 'proposal_type', 'start_at', 'end_at', 'onchain_action_type', 'onchain_execution_status',
+        '_list_display_quorum',
     ]
     readonly_fields = [
         'vote_for_issuer', 'vote_against_issuer', 'abstain_issuer', 'version',
@@ -22,6 +23,11 @@ class ProposalAdmin(admin.ModelAdmin):
         'proposal_status', 'payment_status', 'version', 'start_at', 'end_at', 'hide',
         'vote_for_result', 'vote_against_result', 'vote_abstain_result', 'aqua_circulating_supply',
         'ice_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
+        'proposal_type',
+        'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
+        'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
+        'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
+        'asset_aquarius_traction', 'asset_issuer_commitments',
         'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
     ]
     list_filter = ('start_at', 'end_at')

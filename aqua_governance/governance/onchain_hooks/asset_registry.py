@@ -1,11 +1,10 @@
 import logging
-import time
 from typing import Optional
 
 from django.conf import settings
 from stellar_sdk import Keypair, SorobanServer, TransactionBuilder, scval
 from stellar_sdk.exceptions import PrepareTransactionException
-from stellar_sdk.soroban_rpc import GetTransactionStatus, SendTransactionStatus
+from stellar_sdk.soroban_rpc import SendTransactionStatus
 
 from aqua_governance.governance.models import Proposal
 from aqua_governance.governance.onchain_hooks.validators import normalize_asset_addresses
@@ -46,20 +45,7 @@ def execute_asset_registry_action(proposal: Proposal, args: list[str], allowed: 
         parameters=parameters,
         proposal_id=proposal.id,
     )
-    max_polls = settings.ONCHAIN_TX_MAX_POLLS
-    poll_interval = settings.ONCHAIN_TX_POLL_INTERVAL_SECONDS
-
-    for _ in range(max_polls):
-        get_result = server.get_transaction(tx_hash)
-        if get_result.status == GetTransactionStatus.SUCCESS:
-            return tx_hash
-        if get_result.status == GetTransactionStatus.FAILED:
-            raise RuntimeError(
-                f"Soroban transaction failed. hash={tx_hash} result_xdr={get_result.result_xdr}",
-            )
-        time.sleep(poll_interval)
-
-    raise RuntimeError(f"Soroban transaction confirmation timeout. hash={tx_hash}")
+    return tx_hash
 
 
 def _send_execute_proposal_transaction(

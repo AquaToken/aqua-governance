@@ -1,18 +1,25 @@
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
 from django.conf import settings
 from django.utils import timezone
 from stellar_sdk import Server
+from stellar_sdk.soroban_rpc import GetTransactionStatus
 
 from aqua_governance.governance.models import Proposal
+from aqua_governance.governance.onchain_hooks import execute_onchain_action
+from aqua_governance.governance.onchain_hooks.soroban import get_soroban_transaction
 from aqua_governance.governance.task_logic.proposal_finalization import (
+    retry_onchain_execution_for_voted_proposal,
     update_proposal_final_results,
 )
 from aqua_governance.governance.task_logic.vote_indexing import (
     update_proposal_votes_snapshot,
 )
 from aqua_governance.taskapp import app as celery_app
+
+logger = logging.getLogger(__name__)
 
 
 @celery_app.task(ignore_result=True)
@@ -60,9 +67,8 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
     """
     Update votes for proposal.
     """
-    should_refresh_final_results = proposal_id is None
     if proposal_id is None:
-        proposals = Proposal.objects.filter(proposal_status__in=[Proposal.VOTED]).order_by("-id")
+        proposals = Proposal.objects.filter(proposal_status__in=[Proposal.VOTED]).order_by('-id')
     else:
         proposals = Proposal.objects.filter(id=proposal_id)
 
@@ -74,8 +80,95 @@ def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool =
             horizon_server=horizon_server,
             freezing_amount=freezing_amount,
         )
-        if should_refresh_final_results and proposal.proposal_status == Proposal.VOTED:
-            update_proposal_final_results(proposal.id)
+
+
+@celery_app.task(ignore_result=True)
+def task_execute_onchain_action_send(proposal_id: int):
+    claimed = Proposal.objects.filter(
+        id=proposal_id,
+        proposal_status=Proposal.VOTED,
+        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_PENDING,
+        onchain_execution_tx_hash__isnull=True,
+    ).update(onchain_execution_status=Proposal.ONCHAIN_EXECUTION_IN_PROGRESS)
+    if not claimed:
+        return
+
+    proposal = Proposal.objects.get(id=proposal_id)
+
+    try:
+        tx_hash = execute_onchain_action(proposal)
+        if not tx_hash:
+            raise ValueError('Onchain hook returned empty transaction hash')
+    except Exception:
+        logger.exception(
+            'Onchain send failed for proposal %s (action=%s).',
+            proposal.id,
+            proposal.onchain_action_type,
+        )
+        Proposal.objects.filter(id=proposal_id).update(
+            onchain_execution_status=Proposal.ONCHAIN_EXECUTION_FAILED,
+            onchain_execution_tx_hash=None,
+        )
+        return
+
+    Proposal.objects.filter(id=proposal_id).update(
+        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUBMITTED,
+        onchain_execution_tx_hash=tx_hash,
+    )
+
+
+@celery_app.task(ignore_result=True)
+def task_poll_submitted_onchain_executions():
+    proposals = Proposal.objects.filter(
+        proposal_status=Proposal.VOTED,
+        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUBMITTED,
+    ).exclude(onchain_execution_tx_hash__isnull=True)
+
+    for proposal in proposals:
+        try:
+            result = get_soroban_transaction(proposal.onchain_execution_tx_hash)
+        except Exception:
+            logger.exception(
+                'Failed to fetch Soroban transaction status for proposal %s tx=%s.',
+                proposal.id,
+                proposal.onchain_execution_tx_hash,
+            )
+            continue
+
+        if result.status == GetTransactionStatus.SUCCESS:
+            Proposal.objects.filter(id=proposal.id).update(
+                onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUCCESS,
+            )
+            continue
+
+        if result.status == GetTransactionStatus.FAILED:
+            logger.error(
+                'Soroban transaction failed for proposal %s tx=%s result_xdr=%s',
+                proposal.id,
+                proposal.onchain_execution_tx_hash,
+                getattr(result, 'result_xdr', None),
+            )
+            Proposal.objects.filter(id=proposal.id).update(
+                onchain_execution_status=Proposal.ONCHAIN_EXECUTION_FAILED,
+            )
+
+
+@celery_app.task(ignore_result=True)
+def task_retry_failed_onchain_executions():
+    proposals = Proposal.objects.filter(
+        proposal_status=Proposal.VOTED,
+        onchain_action_type__in=[
+            Proposal.ONCHAIN_ACTION_ADD_ASSET,
+            Proposal.ONCHAIN_ACTION_REMOVE_ASSET,
+        ],
+        onchain_execution_status__in=[
+            Proposal.ONCHAIN_EXECUTION_FAILED,
+            Proposal.ONCHAIN_EXECUTION_PENDING,
+        ],
+    ).order_by('-id')
+
+    for proposal in proposals:
+        retry_onchain_execution_for_voted_proposal(proposal.id)
 
 
 @celery_app.task(ignore_result=True)

@@ -7,7 +7,6 @@ from django.conf import settings
 from django.db import transaction
 
 from aqua_governance.governance.models import LogVote, Proposal
-from aqua_governance.governance.onchain_hooks import execute_onchain_action
 from aqua_governance.utils.signals import DisableSignals
 
 
@@ -23,7 +22,8 @@ def update_proposal_final_results(proposal_id: int) -> None:
             hide=False,
             claimed=False,
             asset_code__in=supported_vote_assets,
-        ).values_list('amount', flat=True))
+        ).values_list('amount', flat=True),
+    )
     vote_against_result = sum(
         proposal.logvote_set.filter(
             vote_choice=LogVote.VOTE_AGAINST,
@@ -47,8 +47,27 @@ def update_proposal_final_results(proposal_id: int) -> None:
     has_fresh_ice_supply = _update_ice_circulating_supply(proposal)
 
     with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-        proposal.save(update_fields=['vote_for_result', 'vote_against_result', 'vote_abstain_result',
-                                     'ice_circulating_supply'])
+        proposal.save(
+            update_fields=[
+                'vote_for_result',
+                'vote_against_result',
+                'vote_abstain_result',
+                'ice_circulating_supply',
+            ],
+        )
+    _execute_onchain_action_if_needed(proposal, has_fresh_ice_supply=has_fresh_ice_supply)
+
+
+def retry_onchain_execution_for_voted_proposal(proposal_id: int) -> None:
+    proposal = Proposal.objects.get(id=proposal_id)
+    if proposal.proposal_status != Proposal.VOTED:
+        return
+
+    has_fresh_ice_supply = _update_ice_circulating_supply(proposal)
+    if has_fresh_ice_supply:
+        with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
+            proposal.save(update_fields=['ice_circulating_supply'])
+
     _execute_onchain_action_if_needed(proposal, has_fresh_ice_supply=has_fresh_ice_supply)
 
 
@@ -57,14 +76,14 @@ def _update_ice_circulating_supply(proposal: Proposal) -> bool:
         response = requests.get(settings.ICE_CIRCULATING_URL, timeout=10)
     except requests.RequestException:
         logger.exception(
-            "Failed to fetch ICE circulating supply for proposal %s.",
+            'Failed to fetch ICE circulating supply for proposal %s.',
             proposal.id,
         )
         return False
 
     if response.status_code != 200:
         logger.error(
-            "ICE supply fetch returned non-200 status for proposal %s: %s",
+            'ICE supply fetch returned non-200 status for proposal %s: %s',
             proposal.id,
             response.status_code,
         )
@@ -74,7 +93,7 @@ def _update_ice_circulating_supply(proposal: Proposal) -> bool:
         proposal.ice_circulating_supply = float(response.json()['ice_supply_amount'])
     except (KeyError, TypeError, ValueError):
         logger.exception(
-            "Failed to parse ICE circulating supply payload for proposal %s.",
+            'Failed to parse ICE circulating supply payload for proposal %s.',
             proposal.id,
         )
         return False
@@ -84,7 +103,7 @@ def _update_ice_circulating_supply(proposal: Proposal) -> bool:
 
 def _as_decimal(value: Any) -> Decimal:
     if value is None:
-        return Decimal("0")
+        return Decimal('0')
     if isinstance(value, Decimal):
         return value
     return Decimal(str(value))
@@ -99,7 +118,7 @@ def _has_proposal_quorum(proposal: Proposal) -> bool:
     required_votes = (
         _as_decimal(proposal.ice_circulating_supply)
         * _as_decimal(proposal.percent_for_quorum)
-        / Decimal("100")
+        / Decimal('100')
     )
     return total_votes >= required_votes
 
@@ -109,6 +128,8 @@ def _is_proposal_approved(proposal: Proposal) -> bool:
 
 
 def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: bool) -> None:
+    should_enqueue_send_task = False
+
     with transaction.atomic():
         proposal = Proposal.objects.select_for_update().get(id=proposal.id)
 
@@ -126,14 +147,18 @@ def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: 
         if proposal.proposal_status != Proposal.VOTED:
             return
 
-        # Only a confirmed onchain success is terminal. FAILED/SKIPPED may become
-        # executable later after external retries or delayed vote indexing.
         if proposal.onchain_execution_status == Proposal.ONCHAIN_EXECUTION_SUCCESS:
+            return
+
+        if proposal.onchain_execution_status in (
+            Proposal.ONCHAIN_EXECUTION_IN_PROGRESS,
+            Proposal.ONCHAIN_EXECUTION_SUBMITTED,
+        ):
             return
 
         if not has_fresh_ice_supply:
             logger.error(
-                "Skip onchain action for proposal %s due to stale or missing ICE supply.",
+                'Skip onchain action for proposal %s due to stale or missing ICE supply.',
                 proposal.id,
             )
             proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_FAILED
@@ -148,7 +173,7 @@ def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: 
             proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_SKIPPED
             proposal.onchain_execution_tx_hash = None
             logger.info(
-                "Skip onchain action for proposal %s due to result check. approved=%s quorum=%s",
+                'Skip onchain action for proposal %s due to result check. approved=%s quorum=%s',
                 proposal.id,
                 is_approved,
                 has_quorum,
@@ -157,24 +182,17 @@ def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: 
                 proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
             return
 
-        try:
-            tx_hash = execute_onchain_action(proposal)
-            if not tx_hash:
-                raise ValueError("Onchain hook returned empty transaction hash")
-        except Exception:
-            # TODO: Add retries/backoff/manual re-run strategy for failed onchain execution.
-            logger.exception(
-                "Onchain hook execution failed for proposal %s (action=%s)",
-                proposal.id,
-                proposal.onchain_action_type,
-            )
-            proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_FAILED
-            proposal.onchain_execution_tx_hash = None
-            with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-                proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
-            return
-
-        proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_SUCCESS
-        proposal.onchain_execution_tx_hash = tx_hash
+        proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_PENDING
+        proposal.onchain_execution_tx_hash = None
         with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
             proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
+        should_enqueue_send_task = True
+
+    if should_enqueue_send_task:
+        _enqueue_onchain_send_task(proposal.id)
+
+
+def _enqueue_onchain_send_task(proposal_id: int) -> None:
+    from aqua_governance.governance.tasks import task_execute_onchain_action_send
+
+    task_execute_onchain_action_send.delay(proposal_id)
