@@ -48,6 +48,7 @@ class ProposalListSerializer(serializers.ModelSerializer):
             'is_simple_proposal', 'aqua_circulating_supply', 'vote_abstain_result',
             'proposal_type',
             'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_started_at', 'onchain_execution_submitted_at', 'onchain_execution_poll_count',
         ]
 
 
@@ -63,6 +64,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
             'abstain_issuer', 'vote_abstain_result',
             'proposal_type',
             'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_started_at', 'onchain_execution_submitted_at', 'onchain_execution_poll_count',
             'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
             'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
             'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',

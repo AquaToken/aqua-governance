@@ -1,6 +1,7 @@
 from datetime import timedelta
 
 from django.conf import settings
+from django.db import connection
 from django.db import transaction
 from django.db.models import Q
 
@@ -32,6 +33,11 @@ def _value_is_blank(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+def _acquire_asset_submit_lock() -> None:
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [settings.ASSET_SUBMIT_ADVISORY_LOCK_ID])
+
+
 class ProposalListSerializer(serializers.ModelSerializer):
     text = QuillField()
     logvote_set = LogVoteSerializer(many=True)
@@ -44,7 +50,8 @@ class ProposalListSerializer(serializers.ModelSerializer):
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'last_updated_at', 'created_at',
             'logvote_set', 'percent_for_quorum', 'ice_circulating_supply', 'vote_for_issuer', 'vote_against_issuer',
             'abstain_issuer', 'vote_abstain_result', 'proposal_type', 'onchain_action_type', 'onchain_action_args',
-            'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
+            'onchain_execution_submitted_at', 'onchain_execution_poll_count',
         ]
 
 
@@ -61,7 +68,8 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
             'aqua_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
             'history_proposal', 'created_at', 'percent_for_quorum', 'ice_circulating_supply',
             'abstain_issuer', 'vote_abstain_result', 'proposal_type', 'onchain_action_type', 'onchain_action_args',
-            'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
+            'onchain_execution_submitted_at', 'onchain_execution_poll_count',
             'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
             'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
             'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
@@ -83,13 +91,15 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
             'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
             'asset_aquarius_traction', 'asset_issuer_commitments',
             'onchain_action_type', 'onchain_action_args',
-            'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
+            'onchain_execution_submitted_at', 'onchain_execution_poll_count',
             'proposal_status', 'payment_status', 'draft', 'last_updated_at', 'created_at',
         ]
         read_only_fields = [
             'proposal_status', 'payment_status', 'draft', 'start_at', 'end_at', 'last_updated_at', 'created_at',
             'discord_channel_name', 'discord_channel_url',
-            'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
+            'onchain_execution_submitted_at', 'onchain_execution_poll_count',
         ]
         extra_kwargs = {
             'envelope_xdr': {'required': True},
@@ -175,7 +185,8 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
             'proposal_type',
             'onchain_action_type', 'onchain_action_args',
-            'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
+            'onchain_execution_submitted_at', 'onchain_execution_poll_count',
             'new_envelope_xdr', 'new_transaction_hash', 'new_title', 'new_text',
         ]
         read_only_fields = [
@@ -184,7 +195,8 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
             'proposal_type',
             'onchain_action_type', 'onchain_action_args',
-            'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
+            'onchain_execution_submitted_at', 'onchain_execution_poll_count',
         ]
         extra_kwargs = {
             'new_title': {'required': True},
@@ -218,7 +230,8 @@ class SubmitSerializer(serializers.ModelSerializer):
             'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
             'asset_aquarius_traction', 'asset_issuer_commitments',
             'onchain_action_type', 'onchain_action_args',
-            'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
+            'onchain_execution_submitted_at', 'onchain_execution_poll_count',
             'new_start_at', 'new_end_at', 'new_envelope_xdr', 'new_transaction_hash',
         ]
         read_only_fields = [
@@ -230,7 +243,8 @@ class SubmitSerializer(serializers.ModelSerializer):
             'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
             'asset_aquarius_traction', 'asset_issuer_commitments',
             'onchain_action_type', 'onchain_action_args',
-            'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
+            'onchain_execution_submitted_at', 'onchain_execution_poll_count',
         ]
         extra_kwargs = {
             'new_start_at': {'required': True},
@@ -281,6 +295,8 @@ class SubmitSerializer(serializers.ModelSerializer):
         validated_data['payment_status'] = status
 
         with transaction.atomic():
+            if instance.proposal_type == Proposal.PROPOSAL_TYPE_ASSET:
+                _acquire_asset_submit_lock()
             locked_instance = Proposal.objects.select_for_update().get(id=instance.id)
             if (
                 locked_instance.proposal_type == Proposal.PROPOSAL_TYPE_ASSET

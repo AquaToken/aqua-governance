@@ -78,6 +78,7 @@ class Proposal(models.Model):
     ONCHAIN_EXECUTION_SUBMITTED = 'SUBMITTED'
     ONCHAIN_EXECUTION_SUCCESS = 'SUCCESS'
     ONCHAIN_EXECUTION_FAILED = 'FAILED'
+    ONCHAIN_EXECUTION_REQUIRES_REVIEW = 'REQUIRES_REVIEW'
     ONCHAIN_EXECUTION_SKIPPED = 'SKIPPED'
     ONCHAIN_EXECUTION_STATUS_CHOICES = (
         (ONCHAIN_EXECUTION_NOT_REQUIRED, 'No execution required'),
@@ -86,6 +87,7 @@ class Proposal(models.Model):
         (ONCHAIN_EXECUTION_SUBMITTED, 'Transaction submitted'),
         (ONCHAIN_EXECUTION_SUCCESS, 'Execution succeeded'),
         (ONCHAIN_EXECUTION_FAILED, 'Execution failed'),
+        (ONCHAIN_EXECUTION_REQUIRES_REVIEW, 'Execution requires review'),
         (ONCHAIN_EXECUTION_SKIPPED, 'Execution skipped'),
     )
 
@@ -173,6 +175,9 @@ class Proposal(models.Model):
         default=ONCHAIN_EXECUTION_NOT_REQUIRED,
     )
     onchain_execution_tx_hash = models.CharField(max_length=128, null=True, blank=True)
+    onchain_execution_started_at = models.DateTimeField(null=True, blank=True)
+    onchain_execution_submitted_at = models.DateTimeField(null=True, blank=True)
+    onchain_execution_poll_count = models.PositiveIntegerField(default=0)
 
     voting_time_tracker = FieldTracker(fields=['end_at'])
 
@@ -261,14 +266,23 @@ class Proposal(models.Model):
             if (
                 self.onchain_execution_status != self.ONCHAIN_EXECUTION_NOT_REQUIRED
                 or self.onchain_execution_tx_hash
+                or self.onchain_execution_started_at
+                or self.onchain_execution_submitted_at
+                or self.onchain_execution_poll_count
             ):
                 self.onchain_execution_status = self.ONCHAIN_EXECUTION_NOT_REQUIRED
                 self.onchain_execution_tx_hash = None
+                self.onchain_execution_started_at = None
+                self.onchain_execution_submitted_at = None
+                self.onchain_execution_poll_count = 0
         elif (
             self.onchain_execution_status == self.ONCHAIN_EXECUTION_NOT_REQUIRED
             and not self.onchain_execution_tx_hash
         ):
             self.onchain_execution_status = self.ONCHAIN_EXECUTION_PENDING
+            self.onchain_execution_started_at = None
+            self.onchain_execution_submitted_at = None
+            self.onchain_execution_poll_count = 0
 
         if not self.pk:
             # AQUA voting is deprecated: keep denominator based on ICE only for new proposals.

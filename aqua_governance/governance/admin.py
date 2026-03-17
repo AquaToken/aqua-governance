@@ -16,6 +16,7 @@ class ProposalAdmin(admin.ModelAdmin):
         'vote_for_issuer', 'vote_against_issuer', 'abstain_issuer', 'version',
         'vote_for_result', 'vote_against_result', 'vote_abstain_result', 'aqua_circulating_supply', 'ice_circulating_supply',
         'payment_status', 'onchain_execution_status', 'onchain_execution_tx_hash',
+        'onchain_execution_started_at', 'onchain_execution_submitted_at', 'onchain_execution_poll_count',
     ]
     search_fields = ['proposed_by']
     fields = [
@@ -29,6 +30,7 @@ class ProposalAdmin(admin.ModelAdmin):
         'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
         'asset_aquarius_traction', 'asset_issuer_commitments',
         'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
+        'onchain_execution_started_at', 'onchain_execution_submitted_at', 'onchain_execution_poll_count',
     ]
     list_filter = ('start_at', 'end_at')
     form = ProposalAdminForm

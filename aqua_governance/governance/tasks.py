@@ -22,6 +22,29 @@ from aqua_governance.taskapp import app as celery_app
 logger = logging.getLogger(__name__)
 
 
+def _mark_stale_in_progress_onchain_executions_for_review() -> None:
+    cutoff = timezone.now() - timedelta(seconds=settings.ONCHAIN_EXECUTION_LEASE_SECONDS)
+    stale_ids = list(
+        Proposal.objects.filter(
+            proposal_status=Proposal.VOTED,
+            onchain_execution_status=Proposal.ONCHAIN_EXECUTION_IN_PROGRESS,
+            onchain_execution_tx_hash__isnull=True,
+            onchain_execution_started_at__isnull=False,
+            onchain_execution_started_at__lt=cutoff,
+        ).values_list('id', flat=True),
+    )
+    if not stale_ids:
+        return
+
+    Proposal.objects.filter(id__in=stale_ids).update(
+        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW,
+    )
+    logger.error(
+        'Marked stale IN_PROGRESS onchain executions for review: proposals=%s',
+        stale_ids,
+    )
+
+
 @celery_app.task(ignore_result=True)
 def task_update_proposal_status(proposal_id):
     """
@@ -89,7 +112,12 @@ def task_execute_onchain_action_send(proposal_id: int):
         proposal_status=Proposal.VOTED,
         onchain_execution_status=Proposal.ONCHAIN_EXECUTION_PENDING,
         onchain_execution_tx_hash__isnull=True,
-    ).update(onchain_execution_status=Proposal.ONCHAIN_EXECUTION_IN_PROGRESS)
+    ).update(
+        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_IN_PROGRESS,
+        onchain_execution_started_at=timezone.now(),
+        onchain_execution_submitted_at=None,
+        onchain_execution_poll_count=0,
+    )
     if not claimed:
         return
 
@@ -108,12 +136,16 @@ def task_execute_onchain_action_send(proposal_id: int):
         Proposal.objects.filter(id=proposal_id).update(
             onchain_execution_status=Proposal.ONCHAIN_EXECUTION_FAILED,
             onchain_execution_tx_hash=None,
+            onchain_execution_submitted_at=None,
+            onchain_execution_poll_count=0,
         )
         return
 
     Proposal.objects.filter(id=proposal_id).update(
         onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUBMITTED,
         onchain_execution_tx_hash=tx_hash,
+        onchain_execution_submitted_at=timezone.now(),
+        onchain_execution_poll_count=0,
     )
 
 
@@ -151,10 +183,26 @@ def task_poll_submitted_onchain_executions():
             Proposal.objects.filter(id=proposal.id).update(
                 onchain_execution_status=Proposal.ONCHAIN_EXECUTION_FAILED,
             )
+            continue
+
+        next_poll_count = proposal.onchain_execution_poll_count + 1
+        update_kwargs = {'onchain_execution_poll_count': next_poll_count}
+        if next_poll_count >= settings.ONCHAIN_TX_MAX_POLLS:
+            update_kwargs['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW
+            logger.error(
+                'Soroban transaction remained NOT_FOUND for proposal %s tx=%s after %s polls; '
+                'manual review required.',
+                proposal.id,
+                proposal.onchain_execution_tx_hash,
+                next_poll_count,
+            )
+        Proposal.objects.filter(id=proposal.id).update(**update_kwargs)
 
 
 @celery_app.task(ignore_result=True)
 def task_retry_failed_onchain_executions():
+    _mark_stale_in_progress_onchain_executions_for_review()
+
     proposals = Proposal.objects.filter(
         proposal_status=Proposal.VOTED,
         onchain_action_type__in=[

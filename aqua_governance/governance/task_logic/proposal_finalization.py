@@ -137,11 +137,25 @@ def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: 
             if (
                 proposal.onchain_execution_status != Proposal.ONCHAIN_EXECUTION_NOT_REQUIRED
                 or proposal.onchain_execution_tx_hash
+                or proposal.onchain_execution_started_at
+                or proposal.onchain_execution_submitted_at
+                or proposal.onchain_execution_poll_count
             ):
                 proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_NOT_REQUIRED
                 proposal.onchain_execution_tx_hash = None
+                proposal.onchain_execution_started_at = None
+                proposal.onchain_execution_submitted_at = None
+                proposal.onchain_execution_poll_count = 0
                 with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-                    proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
+                    proposal.save(
+                        update_fields=[
+                            'onchain_execution_status',
+                            'onchain_execution_tx_hash',
+                            'onchain_execution_started_at',
+                            'onchain_execution_submitted_at',
+                            'onchain_execution_poll_count',
+                        ],
+                    )
             return
 
         if proposal.proposal_status != Proposal.VOTED:
@@ -153,6 +167,7 @@ def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: 
         if proposal.onchain_execution_status in (
             Proposal.ONCHAIN_EXECUTION_IN_PROGRESS,
             Proposal.ONCHAIN_EXECUTION_SUBMITTED,
+            Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW,
         ):
             return
 
@@ -163,8 +178,19 @@ def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: 
             )
             proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_FAILED
             proposal.onchain_execution_tx_hash = None
+            proposal.onchain_execution_started_at = None
+            proposal.onchain_execution_submitted_at = None
+            proposal.onchain_execution_poll_count = 0
             with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-                proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
+                proposal.save(
+                    update_fields=[
+                        'onchain_execution_status',
+                        'onchain_execution_tx_hash',
+                        'onchain_execution_started_at',
+                        'onchain_execution_submitted_at',
+                        'onchain_execution_poll_count',
+                    ],
+                )
             return
 
         is_approved = _is_proposal_approved(proposal)
@@ -172,6 +198,9 @@ def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: 
         if not is_approved or not has_quorum:
             proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_SKIPPED
             proposal.onchain_execution_tx_hash = None
+            proposal.onchain_execution_started_at = None
+            proposal.onchain_execution_submitted_at = None
+            proposal.onchain_execution_poll_count = 0
             logger.info(
                 'Skip onchain action for proposal %s due to result check. approved=%s quorum=%s',
                 proposal.id,
@@ -179,13 +208,32 @@ def _execute_onchain_action_if_needed(proposal: Proposal, has_fresh_ice_supply: 
                 has_quorum,
             )
             with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-                proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
+                proposal.save(
+                    update_fields=[
+                        'onchain_execution_status',
+                        'onchain_execution_tx_hash',
+                        'onchain_execution_started_at',
+                        'onchain_execution_submitted_at',
+                        'onchain_execution_poll_count',
+                    ],
+                )
             return
 
         proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_PENDING
         proposal.onchain_execution_tx_hash = None
+        proposal.onchain_execution_started_at = None
+        proposal.onchain_execution_submitted_at = None
+        proposal.onchain_execution_poll_count = 0
         with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-            proposal.save(update_fields=['onchain_execution_status', 'onchain_execution_tx_hash'])
+            proposal.save(
+                update_fields=[
+                    'onchain_execution_status',
+                    'onchain_execution_tx_hash',
+                    'onchain_execution_started_at',
+                    'onchain_execution_submitted_at',
+                    'onchain_execution_poll_count',
+                ],
+            )
         should_enqueue_send_task = True
 
     if should_enqueue_send_task:
