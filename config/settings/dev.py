@@ -64,7 +64,7 @@ SENTRY_ENABLED = False
 # Horizon configuration
 # --------------------------------------------------------------------------
 
-HORIZON_URL = env('HORIZON_URL', default=env('HORIZON_URL', default='https://horizon-testnet.stellar.org')
+HORIZON_URL = env('HORIZON_URL', default='https://horizon-testnet.stellar.org')
 
 NETWORK_PASSPHRASE = env('NETWORK_PASSPHRASE', default=Network.testnet_network().network_passphrase)
 
