@@ -205,10 +205,7 @@ def task_retry_failed_onchain_executions():
 
     proposals = Proposal.objects.filter(
         proposal_status=Proposal.VOTED,
-        onchain_action_type__in=[
-            Proposal.ONCHAIN_ACTION_ADD_ASSET,
-            Proposal.ONCHAIN_ACTION_REMOVE_ASSET,
-        ],
+        proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
         onchain_execution_status__in=[
             Proposal.ONCHAIN_EXECUTION_FAILED,
             Proposal.ONCHAIN_EXECUTION_PENDING,

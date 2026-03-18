@@ -15,6 +15,7 @@ class ProposalAdmin(admin.ModelAdmin):
     readonly_fields = [
         'vote_for_issuer', 'vote_against_issuer', 'abstain_issuer', 'version',
         'vote_for_result', 'vote_against_result', 'vote_abstain_result', 'aqua_circulating_supply', 'ice_circulating_supply',
+        'onchain_action_type', 'onchain_action_args',
         'payment_status', 'onchain_execution_status', 'onchain_execution_tx_hash',
         'onchain_execution_started_at', 'onchain_execution_submitted_at', 'onchain_execution_poll_count',
     ]
@@ -42,7 +43,14 @@ class ProposalAdmin(admin.ModelAdmin):
 
     def get_readonly_fields(self, request, obj=None):
         if obj:
-            return self.readonly_fields + ['start_at', 'end_at']
+            return self.readonly_fields + [
+                'start_at', 'end_at',
+                'proposal_type',
+                'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
+                'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
+                'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
+                'asset_aquarius_traction', 'asset_issuer_commitments',
+            ]
 
         return self.readonly_fields
 

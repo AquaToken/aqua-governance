@@ -1,6 +1,6 @@
 import requests
 from django.conf import settings
-from django.contrib.postgres.fields import ArrayField
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
@@ -57,15 +57,38 @@ class Proposal(models.Model):
     )
 
     PROPOSAL_TYPE_GENERAL = 'GENERAL'
-    PROPOSAL_TYPE_ASSET = 'ASSET'
+    PROPOSAL_TYPE_ADD_ASSET = 'ADD_ASSET'
+    PROPOSAL_TYPE_REMOVE_ASSET = 'REMOVE_ASSET'
     PROPOSAL_TYPE_CHOICES = (
         (PROPOSAL_TYPE_GENERAL, 'General proposal'),
-        (PROPOSAL_TYPE_ASSET, 'Asset proposal'),
+        (PROPOSAL_TYPE_ADD_ASSET, 'Add asset proposal'),
+        (PROPOSAL_TYPE_REMOVE_ASSET, 'Remove asset proposal'),
+    )
+    ASSET_PROPOSAL_TYPES = (
+        PROPOSAL_TYPE_ADD_ASSET,
+        PROPOSAL_TYPE_REMOVE_ASSET,
+    )
+    EXECUTION_SOURCE_FIELDS = (
+        'proposal_type',
+        'asset_code',
+        'asset_issuer',
+        'asset_contract_address',
+        'asset_issuer_information',
+        'asset_token_description',
+        'asset_holder_distribution',
+        'asset_liquidity',
+        'asset_trading_volume',
+        'asset_audit_info',
+        'asset_stellar_flags',
+        'asset_related_projects',
+        'asset_community_references',
+        'asset_aquarius_traction',
+        'asset_issuer_commitments',
     )
 
     ONCHAIN_ACTION_NONE = 'NONE'
-    ONCHAIN_ACTION_ADD_ASSET = 'ADD_ASSET'
-    ONCHAIN_ACTION_REMOVE_ASSET = 'REMOVE_ASSET'
+    ONCHAIN_ACTION_ADD_ASSET = PROPOSAL_TYPE_ADD_ASSET
+    ONCHAIN_ACTION_REMOVE_ASSET = PROPOSAL_TYPE_REMOVE_ASSET
     ONCHAIN_ACTION_CHOICES = (
         (ONCHAIN_ACTION_NONE, 'No onchain action'),
         (ONCHAIN_ACTION_ADD_ASSET, 'Add asset'),
@@ -158,17 +181,6 @@ class Proposal(models.Model):
     asset_community_references = models.TextField(null=True, blank=True)
     asset_aquarius_traction = models.TextField(null=True, blank=True)
     asset_issuer_commitments = models.TextField(null=True, blank=True)
-
-    onchain_action_type = models.CharField(
-        choices=ONCHAIN_ACTION_CHOICES,
-        max_length=64,
-        default=ONCHAIN_ACTION_NONE,
-    )
-    onchain_action_args = ArrayField(
-        base_field=models.TextField(),
-        blank=True,
-        default=list,
-    )
     onchain_execution_status = models.CharField(
         choices=ONCHAIN_EXECUTION_STATUS_CHOICES,
         max_length=32,
@@ -183,6 +195,35 @@ class Proposal(models.Model):
 
     def __str__(self):
         return str(self.id)
+
+    @classmethod
+    def is_asset_proposal_type(cls, proposal_type: str) -> bool:
+        return proposal_type in cls.ASSET_PROPOSAL_TYPES
+
+    @property
+    def is_asset_proposal(self) -> bool:
+        return self.is_asset_proposal_type(self.proposal_type)
+
+    @property
+    def onchain_action_type(self) -> str:
+        if self.proposal_type == self.PROPOSAL_TYPE_ADD_ASSET:
+            return self.ONCHAIN_ACTION_ADD_ASSET
+        if self.proposal_type == self.PROPOSAL_TYPE_REMOVE_ASSET:
+            return self.ONCHAIN_ACTION_REMOVE_ASSET
+        return self.ONCHAIN_ACTION_NONE
+
+    @property
+    def onchain_action_args(self) -> list[str]:
+        if not self.is_asset_proposal:
+            return []
+
+        from aqua_governance.governance.onchain_hooks.validators import derive_onchain_action_args
+
+        return derive_onchain_action_args(
+            asset_code=self.asset_code,
+            asset_issuer=self.asset_issuer,
+            asset_contract_address=self.asset_contract_address,
+        )
 
     def check_transaction(self):
         from aqua_governance.utils.payments import check_proposal_status
@@ -262,6 +303,8 @@ class Proposal(models.Model):
             keypair = Keypair.random()
             self.abstain_issuer = keypair.public_key
 
+        self._validate_execution_source_fields_immutable(update_fields=update_fields)
+
         if self.onchain_action_type == self.ONCHAIN_ACTION_NONE:
             if (
                 self.onchain_execution_status != self.ONCHAIN_EXECUTION_NOT_REQUIRED
@@ -292,6 +335,28 @@ class Proposal(models.Model):
                 self.ice_circulating_supply = float(response.json()['ice_supply_amount'])
 
         super(Proposal, self).save(force_insert, force_update, using, update_fields)
+
+    def _validate_execution_source_fields_immutable(self, update_fields=None):
+        if not self.pk:
+            return
+
+        fields_to_check = set(self.EXECUTION_SOURCE_FIELDS)
+        if update_fields is not None:
+            fields_to_check &= set(update_fields)
+            if not fields_to_check:
+                return
+
+        persisted = type(self).objects.only(*fields_to_check).get(pk=self.pk)
+        changed_fields = [
+            field_name
+            for field_name in fields_to_check
+            if getattr(self, field_name) != getattr(persisted, field_name)
+        ]
+        if changed_fields:
+            raise ValidationError({
+                field_name: 'Execution source fields are immutable after proposal creation.'
+                for field_name in changed_fields
+            })
 
 
 class LogVote(models.Model):

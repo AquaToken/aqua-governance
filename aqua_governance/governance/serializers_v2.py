@@ -9,7 +9,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
 from aqua_governance.governance.models import Proposal, HistoryProposal
-from aqua_governance.governance.onchain_hooks.validators import normalize_asset_addresses
+from aqua_governance.governance.onchain_hooks.validators import validate_asset_payload
 from aqua_governance.governance.serializer_fields import QuillField
 from aqua_governance.governance.serializers import HistoryProposalSerializer, LogVoteSerializer
 from aqua_governance.utils.payments import check_transaction_xdr
@@ -27,6 +27,12 @@ ASSET_REQUIRED_TEXT_FIELDS = (
     'asset_aquarius_traction',
     'asset_issuer_commitments',
 )
+ASSET_IDENTIFIER_FIELDS = (
+    'asset_code',
+    'asset_issuer',
+    'asset_contract_address',
+)
+ASSET_FIELDS = ASSET_IDENTIFIER_FIELDS + ASSET_REQUIRED_TEXT_FIELDS
 
 
 def _value_is_blank(value) -> bool:
@@ -98,6 +104,7 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         read_only_fields = [
             'proposal_status', 'payment_status', 'draft', 'start_at', 'end_at', 'last_updated_at', 'created_at',
             'discord_channel_name', 'discord_channel_url',
+            'onchain_action_type', 'onchain_action_args',
             'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
             'onchain_execution_submitted_at', 'onchain_execution_poll_count',
         ]
@@ -108,34 +115,22 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         proposal_type = attrs.get('proposal_type', Proposal.PROPOSAL_TYPE_GENERAL)
-        onchain_action_type = attrs.get('onchain_action_type', Proposal.ONCHAIN_ACTION_NONE)
-        onchain_action_args = attrs.get('onchain_action_args', [])
 
         if proposal_type == Proposal.PROPOSAL_TYPE_GENERAL:
-            if onchain_action_type != Proposal.ONCHAIN_ACTION_NONE:
-                raise ValidationError({'onchain_action_type': 'General proposal does not support onchain action.'})
-            if onchain_action_args:
-                raise ValidationError({'onchain_action_args': 'Args must be empty when onchain action is NONE.'})
-        elif proposal_type == Proposal.PROPOSAL_TYPE_ASSET:
-            if onchain_action_type not in (
-                Proposal.ONCHAIN_ACTION_ADD_ASSET,
-                Proposal.ONCHAIN_ACTION_REMOVE_ASSET,
-            ):
-                raise ValidationError({
-                    'onchain_action_type': 'Asset proposal requires ADD_ASSET or REMOVE_ASSET action.',
-                })
-            if not onchain_action_args:
-                raise ValidationError({'onchain_action_args': 'Args are required for selected onchain action.'})
+            self._validate_general_payload(attrs)
+        elif Proposal.is_asset_proposal_type(proposal_type):
             self._validate_asset_payload(attrs)
         else:
             raise ValidationError({'proposal_type': 'Unsupported proposal_type value.'})
-
-        if onchain_action_type in (Proposal.ONCHAIN_ACTION_ADD_ASSET, Proposal.ONCHAIN_ACTION_REMOVE_ASSET):
-            try:
-                attrs['onchain_action_args'] = normalize_asset_addresses(onchain_action_args)
-            except ValueError as exc:
-                raise ValidationError({'onchain_action_args': str(exc)}) from exc
         return attrs
+
+    def _validate_general_payload(self, attrs):
+        errors = {}
+        for field_name in ASSET_FIELDS:
+            if not _value_is_blank(attrs.get(field_name)):
+                errors[field_name] = 'General proposal does not support asset fields.'
+        if errors:
+            raise ValidationError(errors)
 
     def _validate_asset_payload(self, attrs):
         asset_code = attrs.get('asset_code')
@@ -156,15 +151,48 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         if errors:
             raise ValidationError(errors)
 
+        try:
+            validate_asset_payload(
+                asset_code=asset_code,
+                asset_issuer=asset_issuer,
+                asset_contract_address=contract_address,
+                require_onchain_verification=True,
+            )
+        except ValueError as exc:
+            raise ValidationError(self._map_asset_validation_error(str(exc))) from exc
+
+    @staticmethod
+    def _map_asset_validation_error(message: str):
+        if 'Provide both asset_code and asset_issuer together.' in message:
+            return {
+                'asset_code': message,
+                'asset_issuer': message,
+            }
+        if 'Provide asset_code + asset_issuer, or asset_contract_address.' in message:
+            return {
+                'asset_code': message,
+                'asset_issuer': message,
+                'asset_contract_address': message,
+            }
+        if 'asset_issuer' in message:
+            return {'asset_issuer': message}
+        if 'asset_contract_address' in message or 'Soroban RPC' in message:
+            return {'asset_contract_address': message}
+        if 'Horizon' in message or 'contract_id' in message:
+            return {
+                'asset_code': message,
+                'asset_issuer': message,
+            }
+        return {'proposal_type': message}
+
     def create(self, validated_data):
         validated_data['draft'] = True
         validated_data['action'] = Proposal.TO_CREATE
         validated_data.setdefault('proposal_type', Proposal.PROPOSAL_TYPE_GENERAL)
-        validated_data.setdefault('onchain_action_args', [])
-        if validated_data.get('onchain_action_type', Proposal.ONCHAIN_ACTION_NONE) == Proposal.ONCHAIN_ACTION_NONE:
-            validated_data['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_NOT_REQUIRED
-        else:
+        if Proposal.is_asset_proposal_type(validated_data['proposal_type']):
             validated_data['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_PENDING
+        else:
+            validated_data['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_NOT_REQUIRED
         status = check_transaction_xdr(validated_data, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
         if status != Proposal.FINE:
             validated_data['hide'] = True
@@ -259,7 +287,7 @@ class SubmitSerializer(serializers.ModelSerializer):
         if new_end_at <= new_start_at:
             raise ValidationError({'new_end_at': 'new_end_at must be greater than new_start_at.'})
 
-        is_asset_proposal = self.instance.proposal_type == Proposal.PROPOSAL_TYPE_ASSET
+        is_asset_proposal = self.instance.is_asset_proposal
         minimum_days = (
             settings.ASSET_MIN_VOTING_DURATION_DAYS
             if is_asset_proposal
@@ -279,7 +307,7 @@ class SubmitSerializer(serializers.ModelSerializer):
     @staticmethod
     def _has_active_asset_proposal_conflict(current_proposal_id: int) -> bool:
         return Proposal.objects.filter(
-            proposal_type=Proposal.PROPOSAL_TYPE_ASSET,
+            proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
             hide=False,
             draft=False,
         ).exclude(
@@ -295,11 +323,11 @@ class SubmitSerializer(serializers.ModelSerializer):
         validated_data['payment_status'] = status
 
         with transaction.atomic():
-            if instance.proposal_type == Proposal.PROPOSAL_TYPE_ASSET:
+            if instance.is_asset_proposal:
                 _acquire_asset_submit_lock()
             locked_instance = Proposal.objects.select_for_update().get(id=instance.id)
             if (
-                locked_instance.proposal_type == Proposal.PROPOSAL_TYPE_ASSET
+                locked_instance.is_asset_proposal
                 and self._has_active_asset_proposal_conflict(locked_instance.id)
             ):
                 raise ValidationError({
