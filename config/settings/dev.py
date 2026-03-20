@@ -64,10 +64,9 @@ SENTRY_ENABLED = False
 # Horizon configuration
 # --------------------------------------------------------------------------
 
-STELLAR_PASSPHRASE = 'Test SDF Network ; September 2015'
-HORIZON_URL = 'https://horizon-testnet.stellar.org'
+HORIZON_URL = env('HORIZON_URL', default='https://horizon-testnet.stellar.org')
 
-NETWORK_PASSPHRASE = Network.testnet_network().network_passphrase
+NETWORK_PASSPHRASE = env('NETWORK_PASSPHRASE', default=Network.testnet_network().network_passphrase)
 
 
 # Logging configuration

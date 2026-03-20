@@ -6,9 +6,6 @@ from sentry_sdk.integrations.django import DjangoIntegration
 from config.settings.base import *  # noqa: F403
 
 
-environ.Env.read_env()
-
-
 DEBUG = False
 
 ADMINS = env.json('ADMINS')
@@ -73,9 +70,12 @@ if CELERY_ENABLED:
 SENTRY_DSN = env('SENTRY_DSN', default='')
 SENTRY_ENABLED = True if SENTRY_DSN else False
 
+SENTRY_ENVIRONMENT = env('SENTRY_ENVIRONMENT', default='production')
+
 if SENTRY_ENABLED:
     sentry_sdk.init(
         SENTRY_DSN,
+        environment=SENTRY_ENVIRONMENT,
         traces_sample_rate=0.2,
         integrations=[DjangoIntegration(), CeleryIntegration()],
     )
@@ -84,5 +84,4 @@ if SENTRY_ENABLED:
 # Horizon configuration
 # --------------------------------------------------------------------------
 
-STELLAR_PASSPHRASE = 'Public Global Stellar Network ; September 2015'
-HORIZON_URL = 'https://horizon.stellar.org'
+HORIZON_URL = env('HORIZON_URL', default='https://horizon.stellar.org')

@@ -7,13 +7,17 @@ from aqua_governance.governance.models import LogVote, Proposal
 @admin.register(Proposal)
 class ProposalAdmin(admin.ModelAdmin):
     list_display = [
+        'id',
         'proposed_by', 'hide', 'proposal_status', 'payment_status',
-        'title', 'start_at', 'end_at', '_list_display_quorum',
+        'title', 'proposal_type', 'start_at', 'end_at', 'onchain_action_type', 'onchain_execution_status',
+        '_list_display_quorum',
     ]
     readonly_fields = [
         'vote_for_issuer', 'vote_against_issuer', 'abstain_issuer', 'version',
         'vote_for_result', 'vote_against_result', 'vote_abstain_result', 'aqua_circulating_supply', 'ice_circulating_supply',
-        'payment_status',
+        'onchain_action_type', 'onchain_action_args',
+        'payment_status', 'onchain_execution_status', 'onchain_execution_tx_hash',
+        'onchain_execution_started_at', 'onchain_execution_submitted_at', 'onchain_execution_poll_count',
     ]
     search_fields = ['proposed_by']
     fields = [
@@ -21,6 +25,13 @@ class ProposalAdmin(admin.ModelAdmin):
         'proposal_status', 'payment_status', 'version', 'start_at', 'end_at', 'hide',
         'vote_for_result', 'vote_against_result', 'vote_abstain_result', 'aqua_circulating_supply',
         'ice_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
+        'proposal_type',
+        'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
+        'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
+        'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
+        'asset_aquarius_traction', 'asset_issuer_commitments',
+        'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
+        'onchain_execution_started_at', 'onchain_execution_submitted_at', 'onchain_execution_poll_count',
     ]
     list_filter = ('start_at', 'end_at')
     form = ProposalAdminForm
@@ -32,9 +43,19 @@ class ProposalAdmin(admin.ModelAdmin):
 
     def get_readonly_fields(self, request, obj=None):
         if obj:
-            return self.readonly_fields + ['start_at', 'end_at']
+            return self.readonly_fields + [
+                'start_at', 'end_at',
+                'proposal_type',
+                'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
+                'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
+                'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
+                'asset_aquarius_traction', 'asset_issuer_commitments',
+            ]
 
         return self.readonly_fields
+
+    def has_add_permission(self, request):
+        return False
 
     def _list_display_quorum(self, obj):
         if obj.vote_for_result + obj.vote_against_result + obj.vote_abstain_result >= (
