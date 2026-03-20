@@ -65,4 +65,41 @@ SENTRY_ENABLED = False
 # --------------------------------------------------------------------------
 
 HORIZON_URL = env('HORIZON_URL', default='https://horizon-testnet.stellar.org')
+
 NETWORK_PASSPHRASE = env('NETWORK_PASSPHRASE', default=Network.testnet_network().network_passphrase)
+
+
+# Logging configuration
+# --------------------------------------------------------------------------
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'standard': {
+            'format': '%(asctime)s %(levelname)s [%(name)s] %(message)s',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'standard',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'aqua_governance': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'celery': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}

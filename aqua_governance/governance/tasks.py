@@ -1,32 +1,54 @@
 import logging
-import sys
 from datetime import datetime, timedelta
-from decimal import Decimal
-from typing import Optional, Any
+from typing import Optional
 
-from dateutil.parser import parse as date_parse
-import requests
 from django.conf import settings
-from django.db.models import Q
 from django.utils import timezone
-
 from stellar_sdk import Server
-from stellar_sdk.exceptions import NotFoundError
+from stellar_sdk.soroban_rpc import GetTransactionStatus
 
-from aqua_governance.governance.exceptions import ClaimableBalanceParsingError, GenerateGrouKeyException
-from aqua_governance.governance.models import LogVote, Proposal
-from aqua_governance.governance.parser import generate_vote_key, parse_vote
+from aqua_governance.governance.models import Proposal
+from aqua_governance.governance.onchain_hooks import execute_onchain_action
+from aqua_governance.governance.onchain_hooks.soroban import get_soroban_transaction
+from aqua_governance.governance.task_logic.proposal_finalization import (
+    retry_onchain_execution_for_voted_proposal,
+    update_proposal_final_results,
+)
+from aqua_governance.governance.task_logic.vote_indexing import (
+    update_proposal_votes_snapshot,
+)
 from aqua_governance.taskapp import app as celery_app
-from aqua_governance.utils.requests import load_all_records
-from aqua_governance.utils.signals import DisableSignals
+
+logger = logging.getLogger(__name__)
 
 
-logger = logging.getLogger()
+def _mark_stale_in_progress_onchain_executions_for_review() -> None:
+    cutoff = timezone.now() - timedelta(seconds=settings.ONCHAIN_EXECUTION_LEASE_SECONDS)
+    stale_ids = list(
+        Proposal.objects.filter(
+            proposal_status=Proposal.VOTED,
+            onchain_execution_status=Proposal.ONCHAIN_EXECUTION_IN_PROGRESS,
+            onchain_execution_tx_hash__isnull=True,
+            onchain_execution_started_at__isnull=False,
+            onchain_execution_started_at__lt=cutoff,
+        ).values_list('id', flat=True),
+    )
+    if not stale_ids:
+        return
+
+    Proposal.objects.filter(id__in=stale_ids).update(
+        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW,
+    )
+    logger.error(
+        'Marked stale IN_PROGRESS onchain executions for review: proposals=%s',
+        stale_ids,
+    )
+
 
 @celery_app.task(ignore_result=True)
 def task_update_proposal_status(proposal_id):
     """
-    Update proposal status, votes and results before the end of voting
+    Update proposal status, votes and results before the end of voting.
     """
     proposal = Proposal.objects.get(id=proposal_id)
     if proposal.end_at <= timezone.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
@@ -38,7 +60,7 @@ def task_update_proposal_status(proposal_id):
 @celery_app.task(ignore_result=True)
 def task_update_active_proposals():
     """
-    Update active proposals
+    Update active proposals.
     """
     now = datetime.now()
     active_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTING, start_at__lte=now, end_at__gte=now)
@@ -50,205 +72,164 @@ def task_update_active_proposals():
 @celery_app.task(ignore_result=True)
 def task_check_expired_proposals():
     """
-    Check expired proposals
+    Check expired proposals.
     """
     expired_period = datetime.now() - settings.EXPIRED_TIME
     proposals = Proposal.objects.filter(proposal_status=Proposal.DISCUSSION, last_updated_at__lte=expired_period)
     proposals.update(proposal_status=Proposal.EXPIRED)
 
+
 @celery_app.task(ignore_result=True)
-def task_update_proposal_results(proposal_id: Optional[int] = None, freezing_amount: bool = False):
+def task_update_proposal_results(proposal_id: int, freezing_amount: bool = False):
     task_update_votes(proposal_id, freezing_amount)
-    _update_proposal_final_results(proposal_id)
+    update_proposal_final_results(proposal_id)
+
 
 @celery_app.task(ignore_result=True)
 def task_update_votes(proposal_id: Optional[int] = None, freezing_amount: bool = False):
     """
-    Update votes for proposal
+    Update votes for proposal.
     """
     if proposal_id is None:
-        proposals = Proposal.objects.filter(proposal_status__in=[Proposal.VOTED]).order_by("-id")
+        proposals = Proposal.objects.filter(proposal_status__in=[Proposal.VOTED]).order_by('-id')
     else:
         proposals = Proposal.objects.filter(id=proposal_id)
 
     horizon_server = Server(settings.HORIZON_URL)
 
     for proposal in proposals:
-        request_builders = (
-            (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_for_issuer).order(desc=False),
-                LogVote.VOTE_FOR,
-            ),
-            (
-                horizon_server.claimable_balances().for_claimant(proposal.vote_against_issuer).order(desc=False),
-                LogVote.VOTE_AGAINST,
-            ),
+        update_proposal_votes_snapshot(
+            proposal=proposal,
+            horizon_server=horizon_server,
+            freezing_amount=freezing_amount,
         )
-        if proposal.abstain_issuer:
-            request_builders = request_builders + (
-                (
-                    horizon_server.claimable_balances().for_claimant(proposal.abstain_issuer).order(desc=False),
-                    LogVote.VOTE_ABSTAIN,
-                ),
+
+
+@celery_app.task(ignore_result=True)
+def task_execute_onchain_action_send(proposal_id: int):
+    claimed = Proposal.objects.filter(
+        id=proposal_id,
+        proposal_status=Proposal.VOTED,
+        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_PENDING,
+        onchain_execution_tx_hash__isnull=True,
+    ).update(
+        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_IN_PROGRESS,
+        onchain_execution_started_at=timezone.now(),
+        onchain_execution_submitted_at=None,
+        onchain_execution_poll_count=0,
+    )
+    if not claimed:
+        return
+
+    proposal = Proposal.objects.get(id=proposal_id)
+
+    try:
+        tx_hash = execute_onchain_action(proposal)
+        if not tx_hash:
+            raise ValueError('Onchain hook returned empty transaction hash')
+    except Exception:
+        logger.exception(
+            'Onchain send failed for proposal %s (action=%s).',
+            proposal.id,
+            proposal.onchain_action_type,
+        )
+        Proposal.objects.filter(id=proposal_id).update(
+            onchain_execution_status=Proposal.ONCHAIN_EXECUTION_FAILED,
+            onchain_execution_tx_hash=None,
+            onchain_execution_submitted_at=None,
+            onchain_execution_poll_count=0,
+        )
+        return
+
+    Proposal.objects.filter(id=proposal_id).update(
+        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUBMITTED,
+        onchain_execution_tx_hash=tx_hash,
+        onchain_execution_submitted_at=timezone.now(),
+        onchain_execution_poll_count=0,
+    )
+
+
+@celery_app.task(ignore_result=True)
+def task_poll_submitted_onchain_executions():
+    proposals = Proposal.objects.filter(
+        proposal_status=Proposal.VOTED,
+        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUBMITTED,
+    ).exclude(onchain_execution_tx_hash__isnull=True)
+
+    for proposal in proposals:
+        try:
+            result = get_soroban_transaction(proposal.onchain_execution_tx_hash)
+        except Exception:
+            logger.exception(
+                'Failed to fetch Soroban transaction status for proposal %s tx=%s.',
+                proposal.id,
+                proposal.onchain_execution_tx_hash,
             )
+            next_poll_count = proposal.onchain_execution_poll_count + 1
+            update_kwargs = {'onchain_execution_poll_count': next_poll_count}
+            if next_poll_count >= settings.ONCHAIN_TX_MAX_POLLS:
+                update_kwargs['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW
+                logger.error(
+                    'Soroban transaction polling failed for proposal %s tx=%s after %s attempts; '
+                    'manual review required.',
+                    proposal.id,
+                    proposal.onchain_execution_tx_hash,
+                    next_poll_count,
+                )
+            Proposal.objects.filter(id=proposal.id).update(**update_kwargs)
+            continue
 
-        all_votes = proposal.logvote_set.all()
-        raw_vote_groups: dict[str, list[tuple[str, dict[str, Any]]]] = dict()
-        new_log_vote: list[LogVote] = []
-        claimed_log_vote: list[LogVote] = []
-        update_log_vote: list[LogVote] = []
-        indexed_vote_keys_and_index: list[tuple[str, int]] = []
+        if result.status == GetTransactionStatus.SUCCESS:
+            Proposal.objects.filter(id=proposal.id).update(
+                onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUCCESS,
+            )
+            continue
 
-        # Making claimable balances groups by vote_key
-        for request_builder in request_builders:
-            for balance in load_all_records(request_builder[0]):
-                try:
-                    vote_key = generate_vote_key(balance, proposal, request_builder[1])
-                    raw_vote_group = raw_vote_groups.get(vote_key, [])
-                    raw_vote_group.append((request_builder[1], balance))
-                    raw_vote_groups.update({vote_key: raw_vote_group})
-                except GenerateGrouKeyException:
-                    logger.warning('Error generating vote_key', exc_info=sys.exc_info())
+        if result.status == GetTransactionStatus.FAILED:
+            logger.error(
+                'Soroban transaction failed for proposal %s tx=%s result_xdr=%s',
+                proposal.id,
+                proposal.onchain_execution_tx_hash,
+                getattr(result, 'result_xdr', None),
+            )
+            Proposal.objects.filter(id=proposal.id).update(
+                onchain_execution_status=Proposal.ONCHAIN_EXECUTION_FAILED,
+            )
+            continue
 
-        logger.info(f"Proposal {proposal.id} has {len(raw_vote_groups)} vote groups")
+        next_poll_count = proposal.onchain_execution_poll_count + 1
+        update_kwargs = {'onchain_execution_poll_count': next_poll_count}
+        if next_poll_count >= settings.ONCHAIN_TX_MAX_POLLS:
+            update_kwargs['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW
+            logger.error(
+                'Soroban transaction remained NOT_FOUND for proposal %s tx=%s after %s polls; '
+                'manual review required.',
+                proposal.id,
+                proposal.onchain_execution_tx_hash,
+                next_poll_count,
+            )
+        Proposal.objects.filter(id=proposal.id).update(**update_kwargs)
 
-        # Sorting raw_vote_group and parse new votes or update old votes
-        for vote_key, raw_vote_group in raw_vote_groups.items():
-            raw_vote_group.sort(key=lambda item: Decimal(item[1]['amount']), reverse=True)
 
-            votes = list(all_votes.filter(key=vote_key))
-            for vote_group_index, (vote_choice, raw_vote) in enumerate(raw_vote_group):
-                vote = None
-                for _vote in votes:
-                    if _vote.group_index == vote_group_index:
-                        vote = _vote
-                try:
-                    if vote is not None:
-                        update_vote = _make_updated_vote(vote, vote_group_index, raw_vote, freezing_amount)
-                        if update_vote:
-                            update_log_vote.append(update_vote)
-                            indexed_vote_keys_and_index.append((vote_key, vote_group_index))
-                        else:
-                            logger.warning(f'Error updating vote for {vote_key}, {vote_group_index}')
-                    else:
-                        new_vote = _make_new_vote(vote_key, vote_group_index, raw_vote, proposal, vote_choice,
-                                                  freezing_amount)
-                        old_vote = all_votes.filter(hide=False, claimable_balance_id=new_vote.claimable_balance_id).first()
-                        if old_vote is not None:
-                            update_vote = _make_updated_vote(old_vote, vote_group_index, raw_vote, freezing_amount)
-                            update_log_vote.append(update_vote)
-                            indexed_vote_keys_and_index.append((vote_key, vote_group_index))
-                        elif new_vote:
-                            new_log_vote.append(new_vote)
-                            indexed_vote_keys_and_index.append((vote_key, vote_group_index))
-                        else:
-                            logger.warning(f'Error create vote for {vote_key}, {vote_group_index}')
-                except ClaimableBalanceParsingError:
-                    logger.warning('Balance info skipped.', exc_info=sys.exc_info())
+@celery_app.task(ignore_result=True)
+def task_retry_failed_onchain_executions():
+    _mark_stale_in_progress_onchain_executions_for_review()
 
-        # Hiding old voices that are in the database but have not loaded
-        for vote in all_votes:
-            if (vote.key, vote.group_index) not in indexed_vote_keys_and_index:
-                vote.claimed = True
-                claimed_log_vote.append(vote)
+    proposals = Proposal.objects.filter(
+        proposal_status=Proposal.VOTED,
+        proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
+        onchain_execution_status__in=[
+            Proposal.ONCHAIN_EXECUTION_FAILED,
+            Proposal.ONCHAIN_EXECUTION_PENDING,
+        ],
+    ).order_by('-id')
 
-        LogVote.objects.bulk_create(new_log_vote)
-        LogVote.objects.bulk_update(update_log_vote,
-                                    ["claimable_balance_id", "amount", "voted_amount", "transaction_link", "claimed"])
-        LogVote.objects.bulk_update(claimed_log_vote, ["claimed"])
+    for proposal in proposals:
+        retry_onchain_execution_for_voted_proposal(proposal.id)
 
 
 @celery_app.task(ignore_result=True)
 def check_proposals_with_bad_horizon_error():
-    failed_proposals = Proposal.objects.filter(hide=False, payment_status=Proposal.HORIZON_ERROR)
+    failed_proposals = Proposal.objects.filter(payment_status=Proposal.HORIZON_ERROR)
     for proposal in failed_proposals:
         proposal.check_transaction()
-
-
-def _make_new_vote(vote_key: str, vote_group_index: int, claimable_balance: dict, proposal: Proposal, vote_choice: str,
-                   freezing_amount: bool):
-    balance_id = claimable_balance['id']
-    original_amount = ""
-    created_at = ""
-    horizon_server = Server(settings.HORIZON_URL)
-
-    try:
-        ops = horizon_server.operations().for_claimable_balance(balance_id).order(desc=False).limit(50).call()
-        for record in ops["_embedded"]["records"]:
-            if record['type'] == 'create_claimable_balance':
-                created_at = str(date_parse(record["created_at"]))
-                original_amount = str(record["amount"])
-    except NotFoundError:
-        original_amount = claimable_balance['amount']
-        created_at = claimable_balance['last_modified_time']
-
-    if created_at is None:
-        created_at = str(proposal.created_at)
-
-    return parse_vote(
-        vote_key=vote_key,
-        vote_group_index=vote_group_index,
-        claimable_balance=claimable_balance,
-        proposal=proposal,
-        vote_choice=vote_choice,
-        created_at=created_at,
-        original_amount=original_amount,
-        vote_id=None,
-        freezing_amount=freezing_amount
-    )
-
-
-def _make_updated_vote(vote: LogVote, vote_group_index: int, claimable_balance: dict, freezing_amount: bool):
-    created_at = str(vote.created_at)
-    original_amount = str(vote.original_amount)
-
-    return parse_vote(
-        vote_key=vote.key,
-        vote_group_index=vote_group_index,
-        claimable_balance=claimable_balance,
-        proposal=vote.proposal,
-        vote_choice=vote.vote_choice,
-        created_at=created_at,
-        original_amount=original_amount,
-        vote_id=vote.id,
-        freezing_amount=freezing_amount
-    )
-
-
-def _update_proposal_final_results(proposal_id):
-    proposal = Proposal.objects.get(id=proposal_id)
-    supported_vote_assets = [settings.GOVERNANCE_ICE_ASSET_CODE, settings.GDICE_ASSET_CODE]
-    vote_for_result = sum(
-        proposal.logvote_set.filter(
-            vote_choice=LogVote.VOTE_FOR,
-            hide=False,
-            claimed=False,
-            asset_code__in=supported_vote_assets,
-        ).values_list('amount', flat=True))
-    vote_against_result = sum(
-        proposal.logvote_set.filter(
-            vote_choice=LogVote.VOTE_AGAINST,
-            hide=False,
-            claimed=False,
-            asset_code__in=supported_vote_assets,
-        ).values_list('amount', flat=True),
-    )
-    vote_abstain_result = sum(
-        proposal.logvote_set.filter(
-            vote_choice=LogVote.VOTE_ABSTAIN,
-            hide=False,
-            claimed=False,
-            asset_code__in=supported_vote_assets,
-        ).values_list('amount', flat=True),
-    )
-    proposal.vote_for_result = vote_for_result
-    proposal.vote_against_result = vote_against_result
-    proposal.vote_abstain_result = vote_abstain_result
-
-    response = requests.get(settings.ICE_CIRCULATING_URL)
-    if response.status_code == 200:
-        proposal.ice_circulating_supply = float(response.json()['ice_supply_amount'])
-
-    with DisableSignals('aqua_governance.governance.receivers.save_final_result', sender=Proposal):
-        proposal.save(update_fields=['vote_for_result', 'vote_against_result', 'vote_abstain_result',
-                                     'ice_circulating_supply'])

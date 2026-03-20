@@ -1,10 +1,10 @@
-from datetime import datetime
-
 import requests
 from django.conf import settings
-from django.contrib.postgres.fields import ArrayField
-from django.db import models
+from django.core.exceptions import ValidationError
+from django.db import models, transaction
+from django.utils import timezone
 
+from aqua_governance.governance.db_locks import acquire_asset_proposal_transition_lock
 from django_quill.fields import QuillField
 from model_utils import FieldTracker
 from stellar_sdk import Keypair
@@ -57,6 +57,64 @@ class Proposal(models.Model):
         (NONE, 'None'),
     )
 
+    PROPOSAL_TYPE_GENERAL = 'GENERAL'
+    PROPOSAL_TYPE_ADD_ASSET = 'ADD_ASSET'
+    PROPOSAL_TYPE_REMOVE_ASSET = 'REMOVE_ASSET'
+    PROPOSAL_TYPE_CHOICES = (
+        (PROPOSAL_TYPE_GENERAL, 'General proposal'),
+        (PROPOSAL_TYPE_ADD_ASSET, 'Add asset proposal'),
+        (PROPOSAL_TYPE_REMOVE_ASSET, 'Remove asset proposal'),
+    )
+    ASSET_PROPOSAL_TYPES = (
+        PROPOSAL_TYPE_ADD_ASSET,
+        PROPOSAL_TYPE_REMOVE_ASSET,
+    )
+    EXECUTION_SOURCE_FIELDS = (
+        'proposal_type',
+        'asset_code',
+        'asset_issuer',
+        'asset_contract_address',
+        'asset_issuer_information',
+        'asset_token_description',
+        'asset_holder_distribution',
+        'asset_liquidity',
+        'asset_trading_volume',
+        'asset_audit_info',
+        'asset_stellar_flags',
+        'asset_related_projects',
+        'asset_community_references',
+        'asset_aquarius_traction',
+        'asset_issuer_commitments',
+    )
+
+    ONCHAIN_ACTION_NONE = 'NONE'
+    ONCHAIN_ACTION_ADD_ASSET = PROPOSAL_TYPE_ADD_ASSET
+    ONCHAIN_ACTION_REMOVE_ASSET = PROPOSAL_TYPE_REMOVE_ASSET
+    ONCHAIN_ACTION_CHOICES = (
+        (ONCHAIN_ACTION_NONE, 'No onchain action'),
+        (ONCHAIN_ACTION_ADD_ASSET, 'Add asset'),
+        (ONCHAIN_ACTION_REMOVE_ASSET, 'Remove asset'),
+    )
+
+    ONCHAIN_EXECUTION_NOT_REQUIRED = 'NOT_REQUIRED'
+    ONCHAIN_EXECUTION_PENDING = 'PENDING'
+    ONCHAIN_EXECUTION_IN_PROGRESS = 'IN_PROGRESS'
+    ONCHAIN_EXECUTION_SUBMITTED = 'SUBMITTED'
+    ONCHAIN_EXECUTION_SUCCESS = 'SUCCESS'
+    ONCHAIN_EXECUTION_FAILED = 'FAILED'
+    ONCHAIN_EXECUTION_REQUIRES_REVIEW = 'REQUIRES_REVIEW'
+    ONCHAIN_EXECUTION_SKIPPED = 'SKIPPED'
+    ONCHAIN_EXECUTION_STATUS_CHOICES = (
+        (ONCHAIN_EXECUTION_NOT_REQUIRED, 'No execution required'),
+        (ONCHAIN_EXECUTION_PENDING, 'Pending execution'),
+        (ONCHAIN_EXECUTION_IN_PROGRESS, 'Execution in progress'),
+        (ONCHAIN_EXECUTION_SUBMITTED, 'Transaction submitted'),
+        (ONCHAIN_EXECUTION_SUCCESS, 'Execution succeeded'),
+        (ONCHAIN_EXECUTION_FAILED, 'Execution failed'),
+        (ONCHAIN_EXECUTION_REQUIRES_REVIEW, 'Execution requires review'),
+        (ONCHAIN_EXECUTION_SKIPPED, 'Execution skipped'),
+    )
+
     proposed_by = models.CharField(max_length=56)
     title = models.CharField(max_length=256)
     text = QuillField()
@@ -101,12 +159,85 @@ class Proposal(models.Model):
     new_start_at = models.DateTimeField(null=True, blank=True)
     new_end_at = models.DateTimeField(null=True, blank=True)
 
+    proposal_type = models.CharField(
+        choices=PROPOSAL_TYPE_CHOICES,
+        max_length=32,
+        default=PROPOSAL_TYPE_GENERAL,
+        db_index=True,
+    )
     action = models.CharField(choices=PROPOSAL_ACTION_CHOICES, max_length=64, default=NONE)
+
+    # Asset proposal payload (section 5). Mandatory only for proposal_type=ASSET.
+    asset_code = models.CharField(max_length=64, null=True, blank=True)
+    asset_issuer = models.CharField(max_length=56, null=True, blank=True)
+    asset_contract_address = models.CharField(max_length=128, null=True, blank=True)
+    asset_issuer_information = models.TextField(null=True, blank=True)
+    asset_token_description = models.TextField(null=True, blank=True)
+    asset_holder_distribution = models.TextField(null=True, blank=True)
+    asset_liquidity = models.TextField(null=True, blank=True)
+    asset_trading_volume = models.TextField(null=True, blank=True)
+    asset_audit_info = models.TextField(null=True, blank=True)
+    asset_stellar_flags = models.TextField(null=True, blank=True)
+    asset_related_projects = models.TextField(null=True, blank=True)
+    asset_community_references = models.TextField(null=True, blank=True)
+    asset_aquarius_traction = models.TextField(null=True, blank=True)
+    asset_issuer_commitments = models.TextField(null=True, blank=True)
+    onchain_execution_status = models.CharField(
+        choices=ONCHAIN_EXECUTION_STATUS_CHOICES,
+        max_length=32,
+        default=ONCHAIN_EXECUTION_NOT_REQUIRED,
+    )
+    onchain_execution_tx_hash = models.CharField(max_length=128, null=True, blank=True)
+    onchain_execution_started_at = models.DateTimeField(null=True, blank=True)
+    onchain_execution_submitted_at = models.DateTimeField(null=True, blank=True)
+    onchain_execution_poll_count = models.PositiveIntegerField(default=0)
 
     voting_time_tracker = FieldTracker(fields=['end_at'])
 
     def __str__(self):
         return str(self.id)
+
+    @classmethod
+    def is_asset_proposal_type(cls, proposal_type: str) -> bool:
+        return proposal_type in cls.ASSET_PROPOSAL_TYPES
+
+    @property
+    def is_asset_proposal(self) -> bool:
+        return self.is_asset_proposal_type(self.proposal_type)
+
+    @classmethod
+    def has_active_asset_proposal_conflict(cls, current_proposal_id=None) -> bool:
+        queryset = cls.objects.filter(
+            proposal_type__in=cls.ASSET_PROPOSAL_TYPES,
+            hide=False,
+            draft=False,
+        )
+        if current_proposal_id is not None:
+            queryset = queryset.exclude(id=current_proposal_id)
+        return queryset.filter(
+            models.Q(proposal_status__in=(cls.DISCUSSION, cls.VOTING)) | models.Q(action=cls.TO_SUBMIT),
+        ).exists()
+
+    @property
+    def onchain_action_type(self) -> str:
+        if self.proposal_type == self.PROPOSAL_TYPE_ADD_ASSET:
+            return self.ONCHAIN_ACTION_ADD_ASSET
+        if self.proposal_type == self.PROPOSAL_TYPE_REMOVE_ASSET:
+            return self.ONCHAIN_ACTION_REMOVE_ASSET
+        return self.ONCHAIN_ACTION_NONE
+
+    @property
+    def onchain_action_args(self) -> list[str]:
+        if not self.is_asset_proposal:
+            return []
+
+        from aqua_governance.governance.onchain_hooks.validators import derive_onchain_action_args
+
+        return derive_onchain_action_args(
+            asset_code=self.asset_code,
+            asset_issuer=self.asset_issuer,
+            asset_contract_address=self.asset_contract_address,
+        )
 
     def check_transaction(self):
         from aqua_governance.utils.payments import check_proposal_status
@@ -125,7 +256,7 @@ class Proposal(models.Model):
                     created_at=self.last_updated_at,
                 )
                 self.payment_status = status
-                self.last_updated_at = datetime.now()
+                self.last_updated_at = timezone.now()
                 self.text = self.new_text
                 self.title = self.new_title
                 self.version = self.version + 1
@@ -152,7 +283,7 @@ class Proposal(models.Model):
                 )
                 self.payment_status = status
                 self.proposal_status = self.VOTING
-                self.last_updated_at = datetime.now()
+                self.last_updated_at = timezone.now()
                 self.start_at = self.new_start_at
                 self.end_at = self.new_end_at
                 self.transaction_hash = self.new_transaction_hash
@@ -167,13 +298,30 @@ class Proposal(models.Model):
             status = check_proposal_status(self.transaction_hash, self.text.html,
                                            settings.PROPOSAL_CREATE_OR_UPDATE_COST)
             if not (status == self.HORIZON_ERROR and self.status == self.HORIZON_ERROR):
-                if status != self.HORIZON_ERROR:
-                    self.draft = False
-                    self.action = self.NONE
-                    if status != self.FINE:
-                        self.hide = True
-                self.payment_status = status
-                self.save()
+                if self.is_asset_proposal and status != self.HORIZON_ERROR:
+                    with transaction.atomic():
+                        acquire_asset_proposal_transition_lock()
+                        locked_proposal = Proposal.objects.select_for_update().get(id=self.id)
+                        if locked_proposal.action == self.TO_CREATE:
+                            has_asset_conflict = locked_proposal.has_active_asset_proposal_conflict(
+                                current_proposal_id=locked_proposal.id,
+                            )
+                            if not has_asset_conflict:
+                                locked_proposal.draft = False
+                                locked_proposal.action = self.NONE
+                            if status != self.FINE:
+                                locked_proposal.hide = True
+                            locked_proposal.payment_status = status
+                            locked_proposal.save()
+                    self.refresh_from_db()
+                else:
+                    if status != self.HORIZON_ERROR:
+                        self.draft = False
+                        self.action = self.NONE
+                        if status != self.FINE:
+                            self.hide = True
+                    self.payment_status = status
+                    self.save()
 
     def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
         if not self.vote_against_issuer:
@@ -186,6 +334,30 @@ class Proposal(models.Model):
             keypair = Keypair.random()
             self.abstain_issuer = keypair.public_key
 
+        self._validate_execution_source_fields_immutable(update_fields=update_fields)
+
+        if self.onchain_action_type == self.ONCHAIN_ACTION_NONE:
+            if (
+                self.onchain_execution_status != self.ONCHAIN_EXECUTION_NOT_REQUIRED
+                or self.onchain_execution_tx_hash
+                or self.onchain_execution_started_at
+                or self.onchain_execution_submitted_at
+                or self.onchain_execution_poll_count
+            ):
+                self.onchain_execution_status = self.ONCHAIN_EXECUTION_NOT_REQUIRED
+                self.onchain_execution_tx_hash = None
+                self.onchain_execution_started_at = None
+                self.onchain_execution_submitted_at = None
+                self.onchain_execution_poll_count = 0
+        elif (
+            self.onchain_execution_status == self.ONCHAIN_EXECUTION_NOT_REQUIRED
+            and not self.onchain_execution_tx_hash
+        ):
+            self.onchain_execution_status = self.ONCHAIN_EXECUTION_PENDING
+            self.onchain_execution_started_at = None
+            self.onchain_execution_submitted_at = None
+            self.onchain_execution_poll_count = 0
+
         if not self.pk:
             # AQUA voting is deprecated: keep denominator based on ICE only for new proposals.
             self.aqua_circulating_supply = 0
@@ -194,6 +366,28 @@ class Proposal(models.Model):
                 self.ice_circulating_supply = float(response.json()['ice_supply_amount'])
 
         super(Proposal, self).save(force_insert, force_update, using, update_fields)
+
+    def _validate_execution_source_fields_immutable(self, update_fields=None):
+        if not self.pk:
+            return
+
+        fields_to_check = set(self.EXECUTION_SOURCE_FIELDS)
+        if update_fields is not None:
+            fields_to_check &= set(update_fields)
+            if not fields_to_check:
+                return
+
+        persisted = type(self).objects.only(*fields_to_check).get(pk=self.pk)
+        changed_fields = [
+            field_name
+            for field_name in fields_to_check
+            if getattr(self, field_name) != getattr(persisted, field_name)
+        ]
+        if changed_fields:
+            raise ValidationError({
+                field_name: 'Execution source fields are immutable after proposal creation.'
+                for field_name in changed_fields
+            })
 
 
 class LogVote(models.Model):
