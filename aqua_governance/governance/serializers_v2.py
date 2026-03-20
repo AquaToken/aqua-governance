@@ -1,11 +1,11 @@
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import connection
 from django.db import transaction
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
+from aqua_governance.governance.db_locks import acquire_asset_proposal_transition_lock
 from aqua_governance.governance.models import Proposal, HistoryProposal
 from aqua_governance.governance.onchain_hooks.validators import validate_asset_payload
 from aqua_governance.governance.serializer_fields import QuillField
@@ -35,11 +35,6 @@ ASSET_FIELDS = ASSET_IDENTIFIER_FIELDS + ASSET_REQUIRED_TEXT_FIELDS
 
 def _value_is_blank(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
-
-
-def _acquire_asset_submit_lock() -> None:
-    with connection.cursor() as cursor:
-        cursor.execute("SELECT pg_advisory_xact_lock(%s)", [settings.ASSET_SUBMIT_ADVISORY_LOCK_ID])
 
 
 class ProposalListSerializer(serializers.ModelSerializer):
@@ -314,7 +309,7 @@ class SubmitSerializer(serializers.ModelSerializer):
 
         with transaction.atomic():
             if instance.is_asset_proposal:
-                _acquire_asset_submit_lock()
+                acquire_asset_proposal_transition_lock()
             locked_instance = Proposal.objects.select_for_update().get(id=instance.id)
             if (
                 locked_instance.is_asset_proposal

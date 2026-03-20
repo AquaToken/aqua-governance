@@ -1,9 +1,10 @@
 import requests
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 
+from aqua_governance.governance.db_locks import acquire_asset_proposal_transition_lock
 from django_quill.fields import QuillField
 from model_utils import FieldTracker
 from stellar_sdk import Keypair
@@ -297,18 +298,30 @@ class Proposal(models.Model):
             status = check_proposal_status(self.transaction_hash, self.text.html,
                                            settings.PROPOSAL_CREATE_OR_UPDATE_COST)
             if not (status == self.HORIZON_ERROR and self.status == self.HORIZON_ERROR):
-                if status != self.HORIZON_ERROR:
-                    has_asset_conflict = (
-                        self.is_asset_proposal
-                        and self.has_active_asset_proposal_conflict(current_proposal_id=self.id)
-                    )
-                    if not has_asset_conflict:
+                if self.is_asset_proposal and status != self.HORIZON_ERROR:
+                    with transaction.atomic():
+                        acquire_asset_proposal_transition_lock()
+                        locked_proposal = Proposal.objects.select_for_update().get(id=self.id)
+                        if locked_proposal.action == self.TO_CREATE:
+                            has_asset_conflict = locked_proposal.has_active_asset_proposal_conflict(
+                                current_proposal_id=locked_proposal.id,
+                            )
+                            if not has_asset_conflict:
+                                locked_proposal.draft = False
+                                locked_proposal.action = self.NONE
+                            if status != self.FINE:
+                                locked_proposal.hide = True
+                            locked_proposal.payment_status = status
+                            locked_proposal.save()
+                    self.refresh_from_db()
+                else:
+                    if status != self.HORIZON_ERROR:
                         self.draft = False
                         self.action = self.NONE
-                    if status != self.FINE:
-                        self.hide = True
-                self.payment_status = status
-                self.save()
+                        if status != self.FINE:
+                            self.hide = True
+                    self.payment_status = status
+                    self.save()
 
     def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
         if not self.vote_against_issuer:
