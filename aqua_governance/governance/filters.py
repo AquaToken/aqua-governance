@@ -76,6 +76,28 @@ class ProposalOwnerFilterBackend(BaseFilterBackend):
         return queryset
 
 
+class ProposalTypeFilterBackend(BaseFilterBackend):
+    def filter_queryset(self, request, queryset, view):
+        raw_values = request.query_params.getlist('proposal_type')
+        if not raw_values:
+            raw_value = request.query_params.get('proposal_types')
+            if raw_value:
+                raw_values = [raw_value]
+
+        proposal_types = []
+        for raw_value in raw_values:
+            proposal_types.extend(
+                value.strip().upper()
+                for value in raw_value.split(',')
+                if value.strip()
+            )
+
+        if proposal_types:
+            return queryset.filter(proposal_type__in=proposal_types)
+
+        return queryset
+
+
 class ProposalVoteOwnerFilterBackend(BaseFilterBackend):
     def filter_queryset(self, request, queryset, view):
         public_key = request.query_params.get('vote_owner_public_key')
