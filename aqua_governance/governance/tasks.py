@@ -230,6 +230,6 @@ def task_retry_failed_onchain_executions():
 
 @celery_app.task(ignore_result=True)
 def check_proposals_with_bad_horizon_error():
-    failed_proposals = Proposal.objects.filter(hide=False, payment_status=Proposal.HORIZON_ERROR)
+    failed_proposals = Proposal.objects.filter(payment_status=Proposal.HORIZON_ERROR)
     for proposal in failed_proposals:
         proposal.check_transaction()
