@@ -54,6 +54,9 @@ class ProposalAdmin(admin.ModelAdmin):
 
         return self.readonly_fields
 
+    def has_add_permission(self, request):
+        return False
+
     def _list_display_quorum(self, obj):
         if obj.vote_for_result + obj.vote_against_result + obj.vote_abstain_result >= (
             float(obj.ice_circulating_supply)) * obj.percent_for_quorum / 100:
