@@ -204,6 +204,19 @@ class Proposal(models.Model):
     def is_asset_proposal(self) -> bool:
         return self.is_asset_proposal_type(self.proposal_type)
 
+    @classmethod
+    def has_active_asset_proposal_conflict(cls, current_proposal_id=None) -> bool:
+        queryset = cls.objects.filter(
+            proposal_type__in=cls.ASSET_PROPOSAL_TYPES,
+            hide=False,
+            draft=False,
+        )
+        if current_proposal_id is not None:
+            queryset = queryset.exclude(id=current_proposal_id)
+        return queryset.filter(
+            models.Q(proposal_status__in=(cls.DISCUSSION, cls.VOTING)) | models.Q(action=cls.TO_SUBMIT),
+        ).exists()
+
     @property
     def onchain_action_type(self) -> str:
         if self.proposal_type == self.PROPOSAL_TYPE_ADD_ASSET:
@@ -285,8 +298,13 @@ class Proposal(models.Model):
                                            settings.PROPOSAL_CREATE_OR_UPDATE_COST)
             if not (status == self.HORIZON_ERROR and self.status == self.HORIZON_ERROR):
                 if status != self.HORIZON_ERROR:
-                    self.draft = False
-                    self.action = self.NONE
+                    has_asset_conflict = (
+                        self.is_asset_proposal
+                        and self.has_active_asset_proposal_conflict(current_proposal_id=self.id)
+                    )
+                    if not has_asset_conflict:
+                        self.draft = False
+                        self.action = self.NONE
                     if status != self.FINE:
                         self.hide = True
                 self.payment_status = status

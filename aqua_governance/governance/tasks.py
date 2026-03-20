@@ -165,6 +165,18 @@ def task_poll_submitted_onchain_executions():
                 proposal.id,
                 proposal.onchain_execution_tx_hash,
             )
+            next_poll_count = proposal.onchain_execution_poll_count + 1
+            update_kwargs = {'onchain_execution_poll_count': next_poll_count}
+            if next_poll_count >= settings.ONCHAIN_TX_MAX_POLLS:
+                update_kwargs['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW
+                logger.error(
+                    'Soroban transaction polling failed for proposal %s tx=%s after %s attempts; '
+                    'manual review required.',
+                    proposal.id,
+                    proposal.onchain_execution_tx_hash,
+                    next_poll_count,
+                )
+            Proposal.objects.filter(id=proposal.id).update(**update_kwargs)
             continue
 
         if result.status == GetTransactionStatus.SUCCESS:

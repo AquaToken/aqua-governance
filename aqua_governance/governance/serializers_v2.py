@@ -3,8 +3,6 @@ from datetime import timedelta
 from django.conf import settings
 from django.db import connection
 from django.db import transaction
-from django.db.models import Q
-
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
@@ -306,15 +304,7 @@ class SubmitSerializer(serializers.ModelSerializer):
 
     @staticmethod
     def _has_active_asset_proposal_conflict(current_proposal_id: int) -> bool:
-        return Proposal.objects.filter(
-            proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
-            hide=False,
-            draft=False,
-        ).exclude(
-            id=current_proposal_id,
-        ).filter(
-            Q(proposal_status__in=(Proposal.DISCUSSION, Proposal.VOTING)) | Q(action=Proposal.TO_SUBMIT),
-        ).exists()
+        return Proposal.has_active_asset_proposal_conflict(current_proposal_id=current_proposal_id)
 
     def update(self, instance, validated_data):
         validated_data['action'] = Proposal.TO_SUBMIT
