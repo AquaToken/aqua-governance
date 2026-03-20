@@ -19,6 +19,7 @@ from stellar_sdk import TransactionEnvelope
 from aqua_governance.governance.filters import (
     ProposalStatusFilterBackend,
     ProposalOwnerFilterBackend,
+    ProposalTypeFilterBackend,
     LogVoteOwnerFilterBackend,
     LogVoteProposalIdFilterBackend,
     ProposalVoteOwnerFilterBackend,
@@ -47,6 +48,7 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, Generi
     pagination_class = CustomPageNumberPagination
     filter_backends = (
         OrderingFilter,
+        ProposalTypeFilterBackend,
     )
     ordering = ['created_at']
 
@@ -94,6 +96,7 @@ class ProposalViewSet(
         OrderingFilter,
         ProposalStatusFilterBackend,
         ProposalOwnerFilterBackend,
+        ProposalTypeFilterBackend,
         ProposalVoteOwnerFilterBackend,
     )
     ordering = ['created_at']
