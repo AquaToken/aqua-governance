@@ -1,7 +1,34 @@
+from typing import Optional
+
 from django.db.models import Prefetch
 from rest_framework.filters import BaseFilterBackend
 
 from aqua_governance.governance.models import Proposal, LogVote
+
+ACTIVE_QUERY_VALUES = {'1', 'true', 'yes', 'on'}
+
+
+def is_active_vote_query(request) -> bool:
+    active_value = request.query_params.get('active')
+    if active_value is None:
+        return False
+    return active_value.strip().lower() in ACTIVE_QUERY_VALUES
+
+
+def build_logvote_prefetch(request, public_key: Optional[str] = None) -> Prefetch:
+    queryset = LogVote.objects.filter(hide=False)
+    if public_key:
+        queryset = queryset.filter(account_issuer=public_key)
+    if is_active_vote_query(request):
+        queryset = queryset.filter(claimed=False)
+    return Prefetch('logvote_set', queryset.order_by('-created_at'))
+
+
+def apply_vote_owner_queryset_filters(queryset, request, public_key: str):
+    queryset = queryset.filter(logvote__account_issuer=public_key, logvote__hide=False)
+    if is_active_vote_query(request):
+        queryset = queryset.filter(logvote__claimed=False)
+    return queryset.distinct()
 
 
 class HideFilterBackend(BaseFilterBackend):  # TODO: remove it
@@ -49,19 +76,35 @@ class ProposalOwnerFilterBackend(BaseFilterBackend):
         return queryset
 
 
+class ProposalTypeFilterBackend(BaseFilterBackend):
+    def filter_queryset(self, request, queryset, view):
+        raw_values = request.query_params.getlist('proposal_type')
+        if not raw_values:
+            raw_value = request.query_params.get('proposal_types')
+            if raw_value:
+                raw_values = [raw_value]
+
+        proposal_types = []
+        for raw_value in raw_values:
+            proposal_types.extend(
+                value.strip().upper()
+                for value in raw_value.split(',')
+                if value.strip()
+            )
+
+        if proposal_types:
+            return queryset.filter(proposal_type__in=proposal_types)
+
+        return queryset
+
+
 class ProposalVoteOwnerFilterBackend(BaseFilterBackend):
     def filter_queryset(self, request, queryset, view):
         public_key = request.query_params.get('vote_owner_public_key')
         if public_key:
-            return queryset.filter(logvote__account_issuer=public_key,
-                                   logvote__hide=False).distinct().prefetch_related(
-                Prefetch('logvote_set',
-                         LogVote.objects.filter(account_issuer=public_key, hide=False).order_by(
-                             '-created_at')),
-            )
-        return queryset.prefetch_related(
-            Prefetch('logvote_set', LogVote.objects.filter(hide=False).order_by('-created_at')),
-        )
+            queryset = apply_vote_owner_queryset_filters(queryset, request, public_key)
+            return queryset.prefetch_related(build_logvote_prefetch(request, public_key=public_key))
+        return queryset.prefetch_related(build_logvote_prefetch(request))
 
 
 class LogVoteOwnerFilterBackend(BaseFilterBackend):
