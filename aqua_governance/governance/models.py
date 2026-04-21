@@ -389,6 +389,11 @@ class Proposal(models.Model):
                 for field_name in changed_fields
             })
 
+    class Meta:
+        permissions = [
+            ('manage_asset_proposals', 'Can manage asset proposals in admin'),
+        ]
+
 
 class LogVote(models.Model):
     VOTE_FOR = 'vote_for'
