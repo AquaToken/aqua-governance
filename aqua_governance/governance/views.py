@@ -37,6 +37,71 @@ from aqua_governance.governance.serializers import (
 from aqua_governance.governance import serializers_v2
 
 
+def _compute_token_whitelisted(proposals: list) -> bool:
+    add_successes = [
+        p for p in proposals
+        if p.proposal_type == Proposal.PROPOSAL_TYPE_ADD_ASSET
+        and p.onchain_execution_status == Proposal.ONCHAIN_EXECUTION_SUCCESS
+        and p.proposal_status == Proposal.VOTED
+        and p.end_at is not None
+    ]
+    if not add_successes:
+        return False
+    latest_add = max(add_successes, key=lambda p: p.end_at)
+
+    remove_successes = [
+        p for p in proposals
+        if p.proposal_type == Proposal.PROPOSAL_TYPE_REMOVE_ASSET
+        and p.onchain_execution_status == Proposal.ONCHAIN_EXECUTION_SUCCESS
+        and p.proposal_status == Proposal.VOTED
+        and p.end_at is not None
+    ]
+    if not remove_successes:
+        return True
+    latest_remove = max(remove_successes, key=lambda p: p.end_at)
+    return latest_add.end_at > latest_remove.end_at
+
+
+class AssetTokenView(ListModelMixin, GenericViewSet):
+    permission_classes = (AllowAny,)
+    pagination_class = CustomPageNumberPagination
+
+    def get_queryset(self):
+        return Proposal.objects.filter(
+            hide=False,
+            draft=False,
+            proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
+        ).order_by('-end_at', '-created_at')
+
+    def list(self, request, *args, **kwargs):
+        proposals = self.get_queryset()
+
+        token_map = {}
+        for proposal in proposals:
+            key = (proposal.asset_code, proposal.asset_issuer, proposal.asset_contract_address)
+            if key not in token_map:
+                token_map[key] = {
+                    'asset_code': proposal.asset_code,
+                    'asset_issuer': proposal.asset_issuer,
+                    'asset_contract_address': proposal.asset_contract_address,
+                    'proposals': [],
+                }
+            token_map[key]['proposals'].append(proposal)
+
+        token_list = []
+        for token_data in token_map.values():
+            token_data['whitelisted'] = _compute_token_whitelisted(token_data['proposals'])
+            token_list.append(token_data)
+
+        page = self.paginate_queryset(token_list)
+        if page is not None:
+            serializer = serializers_v2.AssetTokenSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = serializers_v2.AssetTokenSerializer(token_list, many=True)
+        return Response(serializer.data)
+
+
 class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, GenericViewSet):
     queryset = Proposal.objects.filter(
         hide=False,
