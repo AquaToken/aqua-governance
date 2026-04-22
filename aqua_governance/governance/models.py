@@ -214,6 +214,7 @@ class Proposal(models.Model):
         )
         if current_proposal_id is not None:
             queryset = queryset.exclude(id=current_proposal_id)
+        queryset = queryset.exclude(proposal_status=cls.EXPIRED)
         return queryset.filter(
             models.Q(proposal_status__in=(cls.DISCUSSION, cls.VOTING)) | models.Q(action=cls.TO_SUBMIT),
         ).exists()

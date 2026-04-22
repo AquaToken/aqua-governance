@@ -76,7 +76,7 @@ def task_check_expired_proposals():
     """
     expired_period = datetime.now() - settings.EXPIRED_TIME
     proposals = Proposal.objects.filter(proposal_status=Proposal.DISCUSSION, last_updated_at__lte=expired_period)
-    proposals.update(proposal_status=Proposal.EXPIRED)
+    proposals.update(proposal_status=Proposal.EXPIRED, action=Proposal.NONE)
 
 
 @celery_app.task(ignore_result=True)
