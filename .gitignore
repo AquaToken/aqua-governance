@@ -5,6 +5,7 @@
 *.iml
 out
 gen
+temp
 
 ### Python template
 # Byte-compiled / optimized / DLL files
@@ -78,3 +79,5 @@ celerybeat-schedule
 # Env config file
 env.config
 .env
+.DS_Store
+.air/

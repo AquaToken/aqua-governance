@@ -12,7 +12,12 @@ from stellar_sdk import HashMemo, Server, TransactionEnvelope
 
 from aqua_governance.governance.models import LogVote, Proposal, HistoryProposal
 from aqua_governance.governance.serializer_fields import QuillField
-from aqua_governance.utils.payments import check_payment, check_xdr_payment, check_proposal_status
+from aqua_governance.utils.payments import (
+    check_payment,
+    check_xdr_payment,
+    check_proposal_status,
+    is_dev_payment_bypass_enabled,
+)
 
 
 class LogVoteSerializer(serializers.ModelSerializer):
@@ -40,7 +45,10 @@ class ProposalListSerializer(serializers.ModelSerializer):
         model = Proposal
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'vote_for_result', 'vote_against_result',
-            'is_simple_proposal', 'aqua_circulating_supply', 'vote_abstain_result'
+            'is_simple_proposal', 'aqua_circulating_supply', 'vote_abstain_result',
+            'proposal_type',
+            'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_started_at', 'onchain_execution_submitted_at', 'onchain_execution_poll_count',
         ]
 
 
@@ -53,7 +61,14 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'is_simple_proposal',
             'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',
             'aqua_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
-            'abstain_issuer', 'vote_abstain_result'
+            'abstain_issuer', 'vote_abstain_result',
+            'proposal_type',
+            'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
+            'onchain_execution_started_at', 'onchain_execution_submitted_at', 'onchain_execution_poll_count',
+            'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
+            'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
+            'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
+            'asset_aquarius_traction', 'asset_issuer_commitments',
         ]
 
 
@@ -75,6 +90,11 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         data = super(ProposalCreateSerializer, self).validate(data)
+        if is_dev_payment_bypass_enabled():
+            data['hide'] = False
+            data['status'] = Proposal.FINE
+            return data
+
         data['hide'] = True
 
         tx_hash = data.get('transaction_hash', None)

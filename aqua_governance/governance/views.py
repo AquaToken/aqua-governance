@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import datetime, timezone as dt_timezone
 
 from django.conf import settings
 from django.db.models import Prefetch
 from django.http import Http404
+from django.utils import timezone
 from rest_framework import exceptions
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import get_object_or_404
@@ -15,8 +16,16 @@ from rest_framework.permissions import AllowAny
 from rest_framework.viewsets import GenericViewSet
 from stellar_sdk import TransactionEnvelope
 
-from aqua_governance.governance.filters import ProposalStatusFilterBackend,ProposalOwnerFilterBackend, \
-    LogVoteOwnerFilterBackend,LogVoteProposalIdFilterBackend,ProposalVoteOwnerFilterBackend
+from aqua_governance.governance.filters import (
+    ProposalStatusFilterBackend,
+    ProposalOwnerFilterBackend,
+    ProposalTypeFilterBackend,
+    LogVoteOwnerFilterBackend,
+    LogVoteProposalIdFilterBackend,
+    ProposalVoteOwnerFilterBackend,
+    build_logvote_prefetch,
+    is_active_vote_query,
+)
 from aqua_governance.governance.models import LogVote, Proposal, HistoryProposal
 from aqua_governance.governance.pagination import CustomPageNumberPagination
 from aqua_governance.governance.serializers import (
@@ -26,17 +35,61 @@ from aqua_governance.governance.serializers import (
     ProposalListSerializer,
 )
 from aqua_governance.governance import serializers_v2
+from aqua_governance.governance.asset_tokens import canonical_asset_key, compute_token_whitelisted
+
+
+class AssetTokenView(ListModelMixin, GenericViewSet):
+    permission_classes = (AllowAny,)
+    pagination_class = CustomPageNumberPagination
+
+    def get_queryset(self):
+        return Proposal.objects.filter(
+            hide=False,
+            draft=False,
+            proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
+        ).order_by('-end_at', '-created_at')
+
+    def list(self, request, *args, **kwargs):
+        proposals = self.get_queryset()
+
+        token_map = {}
+        for proposal in proposals:
+            key = canonical_asset_key(proposal)
+            if key not in token_map:
+                token_map[key] = {
+                    'asset_code': proposal.asset_code,
+                    'asset_issuer': proposal.asset_issuer,
+                    'asset_contract_address': key,
+                    'proposals': [],
+                }
+            token_map[key]['proposals'].append(proposal)
+
+        token_list = []
+        for token_data in token_map.values():
+            token_data['whitelisted'] = compute_token_whitelisted(token_data['proposals'])
+            token_list.append(token_data)
+
+        page = self.paginate_queryset(token_list)
+        if page is not None:
+            serializer = serializers_v2.AssetTokenSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = serializers_v2.AssetTokenSerializer(token_list, many=True)
+        return Response(serializer.data)
 
 
 class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, GenericViewSet):
-    queryset = Proposal.objects.filter(hide=False, draft=False, created_at__lte=datetime(2022, 4, 15)).prefetch_related(
-        Prefetch('logvote_set', LogVote.objects.all().order_by('-created_at')),
+    queryset = Proposal.objects.filter(
+        hide=False,
+        draft=False,
+        created_at__lte=datetime(2022, 4, 15, tzinfo=dt_timezone.utc),
     )
     permission_classes = (AllowAny, )
     serializer_class = ProposalListSerializer
     pagination_class = CustomPageNumberPagination
     filter_backends = (
         OrderingFilter,
+        ProposalTypeFilterBackend,
     )
     ordering = ['created_at']
 
@@ -46,6 +99,13 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, Generi
         elif self.action == 'create':
             return ProposalCreateSerializer
         return super().get_serializer_class()
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        active_only = is_active_vote_query(self.request)
+        if self.action == 'list' and active_only:
+            queryset = queryset.filter(logvote__hide=False, logvote__claimed=False).distinct()
+        return queryset.prefetch_related(build_logvote_prefetch(self.request))
 
 
 class LogVoteView(ListModelMixin, GenericViewSet):
@@ -77,6 +137,7 @@ class ProposalViewSet(
         OrderingFilter,
         ProposalStatusFilterBackend,
         ProposalOwnerFilterBackend,
+        ProposalTypeFilterBackend,
         ProposalVoteOwnerFilterBackend,
     )
     ordering = ['created_at']
@@ -90,14 +151,22 @@ class ProposalViewSet(
 
         if self.action == 'submit_proposal':
             queryset = queryset.filter(
-                proposal_status=Proposal.DISCUSSION, last_updated_at__lte=datetime.now() - settings.DISCUSSION_TIME,
+                proposal_status=Proposal.DISCUSSION,
+                last_updated_at__lte=timezone.now() - settings.DISCUSSION_TIME,
             )
 
         if self.action == 'update' or self.action == 'partial_update':
             queryset = queryset.filter(proposal_status=Proposal.DISCUSSION)
         if self.action == 'check_proposal_payment':
             return queryset.exclude(action=Proposal.NONE)
-        return queryset.filter(draft=False)
+        queryset = queryset.filter(draft=False)
+        if self.action == 'list' and is_active_vote_query(self.request):
+            queryset = queryset.filter(logvote__hide=False, logvote__claimed=False).distinct()
+
+        if self.request.query_params.get('vote_owner_public_key'):
+            return queryset
+
+        return queryset
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -143,6 +212,16 @@ class ProposalViewSet(
     def check_proposal_payment(self, request, pk=None):
         proposal = self.get_object()
         proposal.check_transaction()
+        if (
+            proposal.action == Proposal.TO_CREATE
+            and proposal.is_asset_proposal
+            and proposal.payment_status == Proposal.FINE
+            and proposal.draft
+            and Proposal.has_active_asset_proposal_conflict(current_proposal_id=proposal.id)
+        ):
+            raise exceptions.ValidationError({
+                'proposal_type': 'Another active asset proposal already exists. Activation is blocked.',
+            })
         return Response(data=self.get_serializer(instance=proposal).data)
 
 

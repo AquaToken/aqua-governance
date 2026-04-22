@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import os
 
 from django.conf import settings
 
@@ -9,7 +10,17 @@ from aqua_governance.governance.models import Proposal
 from aqua_governance.utils.requests import load_all_records
 
 
+def is_dev_payment_bypass_enabled():
+    if not settings.DEBUG:
+        return False
+
+    return os.getenv('PROPOSAL_PAYMENT_BYPASS', '').lower() in {'1', 'true', 'yes', 'on'}
+
+
 def check_payment(tx_hash, payment_amount=settings.PROPOSAL_COST):
+    if is_dev_payment_bypass_enabled():
+        return True
+
     try:
         horizon_server = Server(settings.HORIZON_URL)
         for operation in load_all_records(horizon_server.operations().for_transaction(tx_hash)):
@@ -39,6 +50,9 @@ def check_xdr_payment(transaction_envelope, payment_amount=settings.PROPOSAL_COS
 
 
 def check_proposal_status(transaction_hash, text, payment_amount=settings.PROPOSAL_COST):
+    if is_dev_payment_bypass_enabled():
+        return Proposal.FINE
+
     horizon_server = Server(settings.HORIZON_URL)
     try:
         transaction_info = horizon_server.transactions().transaction(transaction_hash).call()
@@ -63,6 +77,9 @@ def check_proposal_status(transaction_hash, text, payment_amount=settings.PROPOS
 
 
 def check_transaction_xdr(data, payment_amount=settings.PROPOSAL_COST):
+    if is_dev_payment_bypass_enabled():
+        return Proposal.FINE
+
     envelope_xdr = data.get('envelope_xdr', None)
     try:
         transaction_envelope = TransactionEnvelope.from_xdr(envelope_xdr, settings.NETWORK_PASSPHRASE)
