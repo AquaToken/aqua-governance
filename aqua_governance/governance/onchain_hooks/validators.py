@@ -1,8 +1,5 @@
-import requests
-
 from django.conf import settings
-from stellar_sdk import Address, Asset, StrKey, SorobanServer
-from stellar_sdk import xdr as stellar_xdr
+from stellar_sdk import Address, Asset, StrKey
 
 
 def normalize_asset_addresses(args: list[str]) -> list[str]:
@@ -66,17 +63,6 @@ def validate_asset_payload(
         except Exception as exc:
             raise ValueError('asset_code or asset_issuer is invalid.') from exc
 
-        if require_onchain_verification:
-            horizon_record = _fetch_horizon_asset(
-                asset_code=normalized_asset_code,
-                asset_issuer=normalized_asset_issuer,
-            )
-            horizon_contract_address = str(horizon_record.get('contract_id') or '').strip()
-            if not horizon_contract_address:
-                raise ValueError('Asset exists in Horizon but has no contract_id.')
-            if horizon_contract_address != derived_contract_address:
-                raise ValueError('Resolved asset contract_id does not match the expected value.')
-
         derived_addresses.append(derived_contract_address)
 
     if has_contract_asset:
@@ -85,9 +71,6 @@ def validate_asset_payload(
 
         if derived_contract_address and derived_contract_address != normalized_contract_address:
             raise ValueError('asset_contract_address does not match asset_code + asset_issuer.')
-
-        if require_onchain_verification:
-            _assert_contract_exists(normalized_contract_address)
 
         derived_addresses = [normalized_contract_address]
 
@@ -101,47 +84,3 @@ def derive_onchain_action_args(*, asset_code, asset_issuer, asset_contract_addre
         asset_contract_address=asset_contract_address,
         require_onchain_verification=False,
     )
-
-
-def _fetch_horizon_asset(*, asset_code: str, asset_issuer: str) -> dict:
-    try:
-        response = requests.get(
-            f'{settings.HORIZON_URL.rstrip("/")}/assets',
-            params={
-                'asset_code': asset_code,
-                'asset_issuer': asset_issuer,
-            },
-            timeout=10,
-        )
-        response.raise_for_status()
-    except requests.RequestException as exc:
-        raise ValueError('Unable to verify asset in Horizon.') from exc
-
-    records = response.json().get('_embedded', {}).get('records', [])
-    if not records:
-        raise ValueError('Asset was not found in Horizon.')
-
-    return records[0]
-
-
-def _assert_contract_exists(contract_address: str) -> None:
-    rpc_url = getattr(settings, 'SOROBAN_RPC_URL', '')
-    if not rpc_url:
-        raise ValueError('SOROBAN_RPC_URL is required to verify asset_contract_address.')
-
-    try:
-        server = SorobanServer(rpc_url)
-        contract_instance_key = stellar_xdr.LedgerKey(
-            type=stellar_xdr.LedgerEntryType.CONTRACT_DATA,
-            contract_data=stellar_xdr.LedgerKeyContractData(
-                contract=Address(contract_address).to_xdr_sc_address(),
-                key=stellar_xdr.SCVal(type=stellar_xdr.SCValType.SCV_LEDGER_KEY_CONTRACT_INSTANCE),
-                durability=stellar_xdr.ContractDataDurability.PERSISTENT,
-            ),
-        )
-        response = server.get_ledger_entries([contract_instance_key])
-    except Exception as exc:
-        raise ValueError('Unable to verify asset_contract_address in Soroban RPC.') from exc
-
-    if not getattr(response, 'entries', None):
-        raise ValueError('asset_contract_address was not found in Soroban RPC.')

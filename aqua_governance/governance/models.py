@@ -214,6 +214,7 @@ class Proposal(models.Model):
         )
         if current_proposal_id is not None:
             queryset = queryset.exclude(id=current_proposal_id)
+        queryset = queryset.exclude(proposal_status=cls.EXPIRED)
         return queryset.filter(
             models.Q(proposal_status__in=(cls.DISCUSSION, cls.VOTING)) | models.Q(action=cls.TO_SUBMIT),
         ).exists()
@@ -309,6 +310,7 @@ class Proposal(models.Model):
                             if not has_asset_conflict:
                                 locked_proposal.draft = False
                                 locked_proposal.action = self.NONE
+                                locked_proposal.last_updated_at = timezone.now()
                             if status != self.FINE:
                                 locked_proposal.hide = True
                             locked_proposal.payment_status = status
@@ -388,6 +390,11 @@ class Proposal(models.Model):
                 field_name: 'Execution source fields are immutable after proposal creation.'
                 for field_name in changed_fields
             })
+
+    class Meta:
+        permissions = [
+            ('manage_asset_proposals', 'Can manage asset proposals in admin'),
+        ]
 
 
 class LogVote(models.Model):

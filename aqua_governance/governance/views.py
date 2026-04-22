@@ -35,6 +35,47 @@ from aqua_governance.governance.serializers import (
     ProposalListSerializer,
 )
 from aqua_governance.governance import serializers_v2
+from aqua_governance.governance.asset_tokens import canonical_asset_key, compute_token_whitelisted
+
+
+class AssetTokenView(ListModelMixin, GenericViewSet):
+    permission_classes = (AllowAny,)
+    pagination_class = CustomPageNumberPagination
+
+    def get_queryset(self):
+        return Proposal.objects.filter(
+            hide=False,
+            draft=False,
+            proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
+        ).order_by('-end_at', '-created_at')
+
+    def list(self, request, *args, **kwargs):
+        proposals = self.get_queryset()
+
+        token_map = {}
+        for proposal in proposals:
+            key = canonical_asset_key(proposal)
+            if key not in token_map:
+                token_map[key] = {
+                    'asset_code': proposal.asset_code,
+                    'asset_issuer': proposal.asset_issuer,
+                    'asset_contract_address': key,
+                    'proposals': [],
+                }
+            token_map[key]['proposals'].append(proposal)
+
+        token_list = []
+        for token_data in token_map.values():
+            token_data['whitelisted'] = compute_token_whitelisted(token_data['proposals'])
+            token_list.append(token_data)
+
+        page = self.paginate_queryset(token_list)
+        if page is not None:
+            serializer = serializers_v2.AssetTokenSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = serializers_v2.AssetTokenSerializer(token_list, many=True)
+        return Response(serializer.data)
 
 
 class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, GenericViewSet):
