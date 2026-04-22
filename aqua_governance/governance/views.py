@@ -35,44 +35,7 @@ from aqua_governance.governance.serializers import (
     ProposalListSerializer,
 )
 from aqua_governance.governance import serializers_v2
-from aqua_governance.governance.onchain_hooks.validators import derive_onchain_action_args
-
-
-def _canonical_asset_key(proposal) -> str:
-    try:
-        args = derive_onchain_action_args(
-            asset_code=proposal.asset_code,
-            asset_issuer=proposal.asset_issuer,
-            asset_contract_address=proposal.asset_contract_address,
-        )
-        return args[0]
-    except Exception:
-        return str((proposal.asset_code, proposal.asset_issuer, proposal.asset_contract_address))
-
-
-def _compute_token_whitelisted(proposals: list) -> bool:
-    add_successes = [
-        p for p in proposals
-        if p.proposal_type == Proposal.PROPOSAL_TYPE_ADD_ASSET
-        and p.onchain_execution_status == Proposal.ONCHAIN_EXECUTION_SUCCESS
-        and p.proposal_status == Proposal.VOTED
-        and p.end_at is not None
-    ]
-    if not add_successes:
-        return False
-    latest_add = max(add_successes, key=lambda p: p.end_at)
-
-    remove_successes = [
-        p for p in proposals
-        if p.proposal_type == Proposal.PROPOSAL_TYPE_REMOVE_ASSET
-        and p.onchain_execution_status == Proposal.ONCHAIN_EXECUTION_SUCCESS
-        and p.proposal_status == Proposal.VOTED
-        and p.end_at is not None
-    ]
-    if not remove_successes:
-        return True
-    latest_remove = max(remove_successes, key=lambda p: p.end_at)
-    return latest_add.end_at > latest_remove.end_at
+from aqua_governance.governance.asset_tokens import canonical_asset_key, compute_token_whitelisted
 
 
 class AssetTokenView(ListModelMixin, GenericViewSet):
@@ -91,7 +54,7 @@ class AssetTokenView(ListModelMixin, GenericViewSet):
 
         token_map = {}
         for proposal in proposals:
-            key = _canonical_asset_key(proposal)
+            key = canonical_asset_key(proposal)
             if key not in token_map:
                 token_map[key] = {
                     'asset_code': proposal.asset_code,
@@ -103,7 +66,7 @@ class AssetTokenView(ListModelMixin, GenericViewSet):
 
         token_list = []
         for token_data in token_map.values():
-            token_data['whitelisted'] = _compute_token_whitelisted(token_data['proposals'])
+            token_data['whitelisted'] = compute_token_whitelisted(token_data['proposals'])
             token_list.append(token_data)
 
         page = self.paginate_queryset(token_list)
