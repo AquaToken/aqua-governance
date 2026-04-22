@@ -310,6 +310,7 @@ class Proposal(models.Model):
                             if not has_asset_conflict:
                                 locked_proposal.draft = False
                                 locked_proposal.action = self.NONE
+                                locked_proposal.last_updated_at = timezone.now()
                             if status != self.FINE:
                                 locked_proposal.hide = True
                             locked_proposal.payment_status = status
