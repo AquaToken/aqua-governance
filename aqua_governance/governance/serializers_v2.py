@@ -319,3 +319,23 @@ class SubmitSerializer(serializers.ModelSerializer):
                     'proposal_type': 'Another active asset proposal already exists. Submit is blocked.',
                 })
             return super(SubmitSerializer, self).update(locked_instance, validated_data)
+
+
+class AssetTokenProposalSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Proposal
+        fields = [
+            'id', 'proposal_type', 'proposal_status', 'title',
+            'start_at', 'end_at', 'new_start_at', 'new_end_at',
+            'vote_for_result', 'vote_against_result', 'vote_abstain_result',
+            'onchain_execution_status', 'onchain_execution_tx_hash',
+            'created_at', 'last_updated_at',
+        ]
+
+
+class AssetTokenSerializer(serializers.Serializer):
+    asset_code = serializers.CharField(allow_null=True)
+    asset_issuer = serializers.CharField(allow_null=True)
+    asset_contract_address = serializers.CharField(allow_null=True)
+    whitelisted = serializers.BooleanField()
+    proposals = AssetTokenProposalSerializer(many=True)

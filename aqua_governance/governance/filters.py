@@ -76,6 +76,9 @@ class ProposalOwnerFilterBackend(BaseFilterBackend):
         return queryset
 
 
+ASSET_PROPOSAL_TYPE_SHORTCUT = 'ASSET'
+
+
 class ProposalTypeFilterBackend(BaseFilterBackend):
     def filter_queryset(self, request, queryset, view):
         raw_values = request.query_params.getlist('proposal_type')
@@ -86,11 +89,14 @@ class ProposalTypeFilterBackend(BaseFilterBackend):
 
         proposal_types = []
         for raw_value in raw_values:
-            proposal_types.extend(
-                value.strip().upper()
-                for value in raw_value.split(',')
-                if value.strip()
-            )
+            for value in raw_value.split(','):
+                normalized = value.strip().upper()
+                if not normalized:
+                    continue
+                if normalized == ASSET_PROPOSAL_TYPE_SHORTCUT:
+                    proposal_types.extend(Proposal.ASSET_PROPOSAL_TYPES)
+                else:
+                    proposal_types.append(normalized)
 
         if proposal_types:
             return queryset.filter(proposal_type__in=proposal_types)
