@@ -35,6 +35,19 @@ from aqua_governance.governance.serializers import (
     ProposalListSerializer,
 )
 from aqua_governance.governance import serializers_v2
+from aqua_governance.governance.onchain_hooks.validators import derive_onchain_action_args
+
+
+def _canonical_asset_key(proposal) -> str:
+    try:
+        args = derive_onchain_action_args(
+            asset_code=proposal.asset_code,
+            asset_issuer=proposal.asset_issuer,
+            asset_contract_address=proposal.asset_contract_address,
+        )
+        return args[0]
+    except Exception:
+        return str((proposal.asset_code, proposal.asset_issuer, proposal.asset_contract_address))
 
 
 def _compute_token_whitelisted(proposals: list) -> bool:
@@ -78,12 +91,12 @@ class AssetTokenView(ListModelMixin, GenericViewSet):
 
         token_map = {}
         for proposal in proposals:
-            key = (proposal.asset_code, proposal.asset_issuer, proposal.asset_contract_address)
+            key = _canonical_asset_key(proposal)
             if key not in token_map:
                 token_map[key] = {
                     'asset_code': proposal.asset_code,
                     'asset_issuer': proposal.asset_issuer,
-                    'asset_contract_address': proposal.asset_contract_address,
+                    'asset_contract_address': key,
                     'proposals': [],
                 }
             token_map[key]['proposals'].append(proposal)
