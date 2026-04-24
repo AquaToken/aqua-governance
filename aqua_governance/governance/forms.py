@@ -2,6 +2,7 @@ from django import forms
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
+from aqua_governance.governance.db_locks import acquire_asset_proposal_transition_lock
 from aqua_governance.governance.models import Proposal
 from aqua_governance.governance.onchain_hooks.validators import validate_asset_payload
 from aqua_governance.governance.serializers_v2 import ASSET_FIELDS, ASSET_REQUIRED_TEXT_FIELDS
@@ -69,6 +70,11 @@ class ProposalAdminForm(forms.ModelForm):
 
         if self.instance._state.adding:
             if is_asset_proposal:
+                acquire_asset_proposal_transition_lock()
+                if Proposal.has_active_asset_proposal_conflict():
+                    raise ValidationError({
+                        'proposal_type': 'Another asset proposal is already active.',
+                    })
                 # Temporary admin-only path: asset proposals are created without payment/XDR.
                 self.instance.draft = False
                 self.instance.action = Proposal.NONE

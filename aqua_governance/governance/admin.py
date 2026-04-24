@@ -87,8 +87,6 @@ class ProposalAdmin(admin.ModelAdmin):
 
     def get_readonly_fields(self, request, obj=None):
         readonly_fields = list(self.readonly_fields)
-        if self._is_asset_manager(request):
-            readonly_fields.remove('proposal_status')
         if obj:
             readonly_fields += [
                 'proposed_by',
