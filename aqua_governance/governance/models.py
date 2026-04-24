@@ -74,17 +74,6 @@ class Proposal(models.Model):
         'asset_code',
         'asset_issuer',
         'asset_contract_address',
-        'asset_issuer_information',
-        'asset_token_description',
-        'asset_holder_distribution',
-        'asset_liquidity',
-        'asset_trading_volume',
-        'asset_audit_info',
-        'asset_stellar_flags',
-        'asset_related_projects',
-        'asset_community_references',
-        'asset_aquarius_traction',
-        'asset_issuer_commitments',
     )
 
     ONCHAIN_ACTION_NONE = 'NONE'
