@@ -32,10 +32,12 @@ class ProposalAdminForm(forms.ModelForm):
             if field_name in self.fields:
                 self.fields[field_name].widget = forms.Textarea(attrs={'rows': 3})
 
-        if self.instance._state.adding:
-            for field_name in ('transaction_hash', 'envelope_xdr', 'discord_username'):
-                if field_name in self.fields:
-                    self.fields[field_name].required = True
+        for field_name in ('transaction_hash', 'envelope_xdr'):
+            if field_name in self.fields:
+                self.fields[field_name].required = False
+
+        if self.instance._state.adding and 'discord_username' in self.fields:
+            self.fields['discord_username'].required = True
 
     class Meta:
         model = Proposal
@@ -53,28 +55,46 @@ class ProposalAdminForm(forms.ModelForm):
     def clean(self):
         cleaned_data = super().clean()
         proposal_type = cleaned_data.get('proposal_type') or self.instance.proposal_type or Proposal.PROPOSAL_TYPE_GENERAL
+        is_asset_proposal = Proposal.is_asset_proposal_type(proposal_type)
 
-        if self._is_asset_manager() and not Proposal.is_asset_proposal_type(proposal_type):
+        if self._is_asset_manager() and not is_asset_proposal:
             raise ValidationError({'proposal_type': 'Managers can manage only asset proposals.'})
 
         if proposal_type == Proposal.PROPOSAL_TYPE_GENERAL:
             self._validate_general_payload(cleaned_data)
-        elif Proposal.is_asset_proposal_type(proposal_type):
+        elif is_asset_proposal:
             self._validate_asset_payload(cleaned_data)
         else:
             raise ValidationError({'proposal_type': 'Unsupported proposal_type value.'})
 
         if self.instance._state.adding:
-            self.instance.draft = True
-            self.instance.action = Proposal.TO_CREATE
+            if is_asset_proposal:
+                # Temporary admin-only path: asset proposals are created without payment/XDR.
+                self.instance.draft = False
+                self.instance.action = Proposal.NONE
+                self.instance.payment_status = Proposal.FINE
+                self.instance.hide = False
+            else:
+                self._validate_general_payment_fields(cleaned_data)
+                self.instance.draft = True
+                self.instance.action = Proposal.TO_CREATE
 
-        if cleaned_data.get('envelope_xdr'):
+        if not is_asset_proposal and cleaned_data.get('envelope_xdr'):
             payment_status = check_transaction_xdr(cleaned_data, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
             self.instance.payment_status = payment_status
             if self.instance._state.adding and payment_status != Proposal.FINE:
                 self.instance.hide = True
 
         return cleaned_data
+
+    @staticmethod
+    def _validate_general_payment_fields(cleaned_data):
+        errors = {}
+        for field_name in ('transaction_hash', 'envelope_xdr'):
+            if _value_is_blank(cleaned_data.get(field_name)):
+                errors[field_name] = 'This field is required for general proposal.'
+        if errors:
+            raise ValidationError(errors)
 
     def _validate_general_payload(self, cleaned_data):
         errors = {}
@@ -94,13 +114,18 @@ class ProposalAdminForm(forms.ModelForm):
 
         try:
             validate_asset_payload(
-                asset_code=cleaned_data.get('asset_code'),
-                asset_issuer=cleaned_data.get('asset_issuer'),
-                asset_contract_address=cleaned_data.get('asset_contract_address'),
+                asset_code=self._cleaned_or_instance_value(cleaned_data, 'asset_code'),
+                asset_issuer=self._cleaned_or_instance_value(cleaned_data, 'asset_issuer'),
+                asset_contract_address=self._cleaned_or_instance_value(cleaned_data, 'asset_contract_address'),
                 require_onchain_verification=False,
             )
         except ValueError as exc:
             raise ValidationError(self._map_asset_validation_error(str(exc))) from exc
+
+    def _cleaned_or_instance_value(self, cleaned_data, field_name):
+        if field_name in cleaned_data:
+            return cleaned_data.get(field_name)
+        return getattr(self.instance, field_name)
 
     @staticmethod
     def _map_asset_validation_error(message: str):

@@ -19,7 +19,6 @@ class ProposalAdmin(admin.ModelAdmin):
         'created_at', 'last_updated_at',
         'draft', 'status', 'action',
         'proposal_status', 'payment_status',
-        'start_at', 'end_at',
         'vote_for_result', 'vote_against_result', 'vote_abstain_result',
         'aqua_circulating_supply', 'ice_circulating_supply', 'percent_for_quorum',
         'onchain_action_type', 'onchain_action_args',
@@ -87,21 +86,16 @@ class ProposalAdmin(admin.ModelAdmin):
         return super().formfield_for_choice_field(db_field, request, **kwargs)
 
     def get_readonly_fields(self, request, obj=None):
+        readonly_fields = list(self.readonly_fields)
+        if self._is_asset_manager(request):
+            readonly_fields.remove('proposal_status')
         if obj:
-            readonly_fields = list(self.readonly_fields) + [
+            readonly_fields += [
                 'proposed_by',
                 'proposal_type',
                 'transaction_hash', 'envelope_xdr',
-                'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
-                'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
-                'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
-                'asset_aquarius_traction', 'asset_issuer_commitments',
+                'asset_code', 'asset_issuer', 'asset_contract_address',
             ]
-            if not request.user.is_superuser:
-                readonly_fields.append('hide')
-            return readonly_fields
-
-        readonly_fields = list(self.readonly_fields)
         if not request.user.is_superuser:
             readonly_fields.append('hide')
         return readonly_fields
