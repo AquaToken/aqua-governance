@@ -36,6 +36,8 @@ class ProposalAdminForm(forms.ModelForm):
         for field_name in ('transaction_hash', 'envelope_xdr'):
             if field_name in self.fields:
                 self.fields[field_name].required = False
+        if 'proposal_status' in self.fields:
+            self.fields['proposal_status'].required = False
 
         if self.instance._state.adding and 'discord_username' in self.fields:
             self.fields['discord_username'].required = True
@@ -68,13 +70,25 @@ class ProposalAdminForm(forms.ModelForm):
         else:
             raise ValidationError({'proposal_type': 'Unsupported proposal_type value.'})
 
+        asset_lock_acquired = False
+        target_status = (
+            cleaned_data.get('proposal_status')
+            or self.instance.proposal_status
+            or Proposal.DISCUSSION
+        )
+        if is_asset_proposal and target_status == Proposal.VOTING:
+            acquire_asset_proposal_transition_lock()
+            asset_lock_acquired = True
+            current_proposal_id = None if self.instance._state.adding else self.instance.id
+            if Proposal.has_active_asset_proposal_conflict(current_proposal_id=current_proposal_id):
+                raise ValidationError({
+                    'proposal_type': 'Another asset proposal is already in voting.',
+                })
+
         if self.instance._state.adding:
             if is_asset_proposal:
-                acquire_asset_proposal_transition_lock()
-                if Proposal.has_active_asset_proposal_conflict():
-                    raise ValidationError({
-                        'proposal_type': 'Another asset proposal is already active.',
-                    })
+                if not asset_lock_acquired:
+                    acquire_asset_proposal_transition_lock()
                 # Temporary admin-only path: asset proposals are created without payment/XDR.
                 self.instance.draft = False
                 self.instance.action = Proposal.NONE

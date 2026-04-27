@@ -4,7 +4,6 @@ from django.conf import settings
 from django.db.models import Prefetch
 from django.http import Http404
 from django.utils import timezone
-from rest_framework import exceptions
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
@@ -212,16 +211,6 @@ class ProposalViewSet(
     def check_proposal_payment(self, request, pk=None):
         proposal = self.get_object()
         proposal.check_transaction()
-        if (
-            proposal.action == Proposal.TO_CREATE
-            and proposal.is_asset_proposal
-            and proposal.payment_status == Proposal.FINE
-            and proposal.draft
-            and Proposal.has_active_asset_proposal_conflict(current_proposal_id=proposal.id)
-        ):
-            raise exceptions.ValidationError({
-                'proposal_type': 'Another active asset proposal already exists. Activation is blocked.',
-            })
         return Response(data=self.get_serializer(instance=proposal).data)
 
 

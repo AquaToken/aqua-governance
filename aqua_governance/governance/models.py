@@ -200,13 +200,11 @@ class Proposal(models.Model):
             proposal_type__in=cls.ASSET_PROPOSAL_TYPES,
             hide=False,
             draft=False,
+            proposal_status=cls.VOTING,
         )
         if current_proposal_id is not None:
             queryset = queryset.exclude(id=current_proposal_id)
-        queryset = queryset.exclude(proposal_status=cls.EXPIRED)
-        return queryset.filter(
-            models.Q(proposal_status__in=(cls.DISCUSSION, cls.VOTING)) | models.Q(action=cls.TO_SUBMIT),
-        ).exists()
+        return queryset.exists()
 
     @property
     def onchain_action_type(self) -> str:
@@ -293,13 +291,9 @@ class Proposal(models.Model):
                         acquire_asset_proposal_transition_lock()
                         locked_proposal = Proposal.objects.select_for_update().get(id=self.id)
                         if locked_proposal.action == self.TO_CREATE:
-                            has_asset_conflict = locked_proposal.has_active_asset_proposal_conflict(
-                                current_proposal_id=locked_proposal.id,
-                            )
-                            if not has_asset_conflict:
-                                locked_proposal.draft = False
-                                locked_proposal.action = self.NONE
-                                locked_proposal.last_updated_at = timezone.now()
+                            locked_proposal.draft = False
+                            locked_proposal.action = self.NONE
+                            locked_proposal.last_updated_at = timezone.now()
                             if status != self.FINE:
                                 locked_proposal.hide = True
                             locked_proposal.payment_status = status
