@@ -297,7 +297,7 @@ class SubmitSerializer(serializers.ModelSerializer):
 
         if is_asset_proposal and self._has_active_asset_proposal_conflict(self.instance.id):
             raise ValidationError({
-                'proposal_type': 'Another active asset proposal already exists. Submit is blocked.',
+                'proposal_type': 'Another asset proposal is already in voting.',
             })
         return attrs
 
@@ -320,7 +320,7 @@ class SubmitSerializer(serializers.ModelSerializer):
                 and self._has_active_asset_proposal_conflict(locked_instance.id)
             ):
                 raise ValidationError({
-                    'proposal_type': 'Another active asset proposal already exists. Submit is blocked.',
+                    'proposal_type': 'Another asset proposal is already in voting.',
                 })
             return super(SubmitSerializer, self).update(locked_instance, validated_data)
 
