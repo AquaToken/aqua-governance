@@ -13,6 +13,14 @@ from aqua_governance.utils.payments import check_transaction_xdr
 from aqua_governance.utils.widgets import CustomQuillWidget
 
 
+ADMIN_OPTIONAL_FIELDS = (
+    'discord_username',
+    'asset_holder_distribution',
+    'asset_liquidity',
+    'asset_trading_volume',
+)
+
+
 def _value_is_blank(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
@@ -42,8 +50,9 @@ class ProposalAdminForm(forms.ModelForm):
         if 'proposal_status' in self.fields:
             self.fields['proposal_status'].required = False
 
-        if self.instance._state.adding and 'discord_username' in self.fields:
-            self.fields['discord_username'].required = True
+        for field_name in ADMIN_OPTIONAL_FIELDS:
+            if field_name in self.fields:
+                self.fields[field_name].required = False
 
         if self.instance._state.adding:
             self._prefill_asset_queue_window()
@@ -174,6 +183,8 @@ class ProposalAdminForm(forms.ModelForm):
     def _validate_asset_payload(self, cleaned_data):
         errors = {}
         for field_name in ASSET_REQUIRED_TEXT_FIELDS:
+            if field_name in ADMIN_OPTIONAL_FIELDS:
+                continue
             if _value_is_blank(cleaned_data.get(field_name)):
                 errors[field_name] = 'This field is required for asset proposal.'
         if errors:
