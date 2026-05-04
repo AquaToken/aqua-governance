@@ -181,7 +181,7 @@ class Proposal(models.Model):
     onchain_execution_submitted_at = models.DateTimeField(null=True, blank=True)
     onchain_execution_poll_count = models.PositiveIntegerField(default=0)
 
-    voting_time_tracker = FieldTracker(fields=['end_at'])
+    voting_time_tracker = FieldTracker(fields=['start_at', 'end_at'])
 
     def __str__(self):
         return str(self.id)
@@ -205,6 +205,23 @@ class Proposal(models.Model):
         if current_proposal_id is not None:
             queryset = queryset.exclude(id=current_proposal_id)
         return queryset.exists()
+
+    @classmethod
+    def has_asset_voting_interval_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
+        queryset = cls.objects.filter(
+            proposal_type__in=cls.ASSET_PROPOSAL_TYPES,
+            hide=False,
+            draft=False,
+            proposal_status__in=(cls.DISCUSSION, cls.VOTING),
+            start_at__isnull=False,
+            end_at__isnull=False,
+        )
+        if current_proposal_id is not None:
+            queryset = queryset.exclude(id=current_proposal_id)
+        return queryset.filter(
+            start_at__lt=end_at,
+            end_at__gt=start_at,
+        ).exists()
 
     @property
     def onchain_action_type(self) -> str:
@@ -269,11 +286,17 @@ class Proposal(models.Model):
                     proposal=self,
                     created_at=self.last_updated_at,
                 )
+                now = timezone.now()
                 self.payment_status = status
-                self.proposal_status = self.VOTING
-                self.last_updated_at = timezone.now()
                 self.start_at = self.new_start_at
                 self.end_at = self.new_end_at
+                if self.end_at and self.end_at <= now:
+                    self.proposal_status = self.EXPIRED
+                elif self.start_at and self.start_at > now:
+                    self.proposal_status = self.DISCUSSION
+                else:
+                    self.proposal_status = self.VOTING
+                self.last_updated_at = now
                 self.transaction_hash = self.new_transaction_hash
                 self.envelope_xdr = self.new_envelope_xdr
                 self.action = self.NONE

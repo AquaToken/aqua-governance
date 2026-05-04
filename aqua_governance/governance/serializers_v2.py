@@ -2,6 +2,7 @@ from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
@@ -283,6 +284,8 @@ class SubmitSerializer(serializers.ModelSerializer):
         new_end_at = attrs['new_end_at']
         if new_end_at <= new_start_at:
             raise ValidationError({'new_end_at': 'new_end_at must be greater than new_start_at.'})
+        if new_end_at <= timezone.now():
+            raise ValidationError({'new_end_at': 'new_end_at must be in the future.'})
 
         is_asset_proposal = self.instance.is_asset_proposal
         minimum_days = (
@@ -295,15 +298,28 @@ class SubmitSerializer(serializers.ModelSerializer):
                 'new_end_at': f'Minimum voting duration for this proposal type is {minimum_days} days.',
             })
 
-        if is_asset_proposal and self._has_active_asset_proposal_conflict(self.instance.id):
-            raise ValidationError({
-                'proposal_type': 'Another asset proposal is already in voting.',
-            })
+        if is_asset_proposal and self._has_asset_voting_interval_conflict(
+            new_start_at,
+            new_end_at,
+            self.instance.id,
+        ):
+            raise self._asset_voting_interval_conflict_error()
         return attrs
 
     @staticmethod
-    def _has_active_asset_proposal_conflict(current_proposal_id: int) -> bool:
-        return Proposal.has_active_asset_proposal_conflict(current_proposal_id=current_proposal_id)
+    def _has_asset_voting_interval_conflict(new_start_at, new_end_at, current_proposal_id: int) -> bool:
+        return Proposal.has_asset_voting_interval_conflict(
+            start_at=new_start_at,
+            end_at=new_end_at,
+            current_proposal_id=current_proposal_id,
+        )
+
+    @staticmethod
+    def _asset_voting_interval_conflict_error() -> ValidationError:
+        return ValidationError({
+            'new_start_at': 'Asset proposal voting interval overlaps with another queued or active asset proposal.',
+            'new_end_at': 'Asset proposal voting interval overlaps with another queued or active asset proposal.',
+        })
 
     def update(self, instance, validated_data):
         validated_data['action'] = Proposal.TO_SUBMIT
@@ -317,11 +333,13 @@ class SubmitSerializer(serializers.ModelSerializer):
             locked_instance = Proposal.objects.select_for_update().get(id=instance.id)
             if (
                 locked_instance.is_asset_proposal
-                and self._has_active_asset_proposal_conflict(locked_instance.id)
+                and self._has_asset_voting_interval_conflict(
+                    validated_data['new_start_at'],
+                    validated_data['new_end_at'],
+                    locked_instance.id,
+                )
             ):
-                raise ValidationError({
-                    'proposal_type': 'Another asset proposal is already in voting.',
-                })
+                raise self._asset_voting_interval_conflict_error()
             return super(SubmitSerializer, self).update(locked_instance, validated_data)
 
 

@@ -1,6 +1,9 @@
+from datetime import timedelta
+
 from django import forms
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 from aqua_governance.governance.db_locks import acquire_asset_proposal_transition_lock
 from aqua_governance.governance.models import Proposal
@@ -42,6 +45,36 @@ class ProposalAdminForm(forms.ModelForm):
         if self.instance._state.adding and 'discord_username' in self.fields:
             self.fields['discord_username'].required = True
 
+        if self.instance._state.adding:
+            self._prefill_asset_queue_window()
+
+    def _prefill_asset_queue_window(self):
+        if 'start_at' not in self.fields or 'end_at' not in self.fields:
+            return
+        if self.initial.get('start_at') or self.initial.get('end_at'):
+            return
+
+        last = (
+            Proposal.objects
+            .filter(
+                proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
+                hide=False,
+                draft=False,
+                proposal_status__in=(Proposal.DISCUSSION, Proposal.VOTING),
+                end_at__isnull=False,
+            )
+            .order_by('-end_at')
+            .first()
+        )
+        now = timezone.now()
+        if last and last.end_at > now:
+            start_at = last.end_at + timedelta(seconds=settings.ASSET_QUEUE_GAP_SECONDS)
+        else:
+            start_at = now
+        end_at = start_at + timedelta(days=settings.ASSET_MIN_VOTING_DURATION_DAYS)
+        self.initial['start_at'] = start_at
+        self.initial['end_at'] = end_at
+
     class Meta:
         model = Proposal
         fields = forms.ALL_FIELDS
@@ -80,9 +113,23 @@ class ProposalAdminForm(forms.ModelForm):
             acquire_asset_proposal_transition_lock()
             asset_lock_acquired = True
             current_proposal_id = None if self.instance._state.adding else self.instance.id
-            if Proposal.has_active_asset_proposal_conflict(current_proposal_id=current_proposal_id):
+            start_at = cleaned_data.get('start_at') or self.instance.start_at
+            end_at = cleaned_data.get('end_at') or self.instance.end_at
+            if not start_at or not end_at:
                 raise ValidationError({
-                    'proposal_type': 'Another asset proposal is already in voting.',
+                    'start_at': 'start_at is required for an active asset proposal.',
+                    'end_at': 'end_at is required for an active asset proposal.',
+                })
+            if end_at and end_at <= timezone.now():
+                raise ValidationError({'end_at': 'end_at must be in the future.'})
+            if Proposal.has_asset_voting_interval_conflict(
+                start_at=start_at,
+                end_at=end_at,
+                current_proposal_id=current_proposal_id,
+            ):
+                raise ValidationError({
+                    'start_at': 'Asset proposal voting interval overlaps with another queued or active asset proposal.',
+                    'end_at': 'Asset proposal voting interval overlaps with another queued or active asset proposal.',
                 })
 
         if self.instance._state.adding:
