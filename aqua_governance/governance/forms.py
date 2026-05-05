@@ -58,17 +58,12 @@ class ProposalAdminForm(forms.ModelForm):
             self._prefill_asset_queue_window()
 
     def _prefill_asset_queue_window(self):
+        # Prefill with the next free queue slot. Safe for any proposal_type because
+        # ProposalAdminForm.clean() forces start_at/end_at back to None for GENERAL
+        # proposals on creation, so prefilled values cannot bypass the submit-payment gate.
         if 'start_at' not in self.fields or 'end_at' not in self.fields:
             return
         if self.initial.get('start_at') or self.initial.get('end_at'):
-            return
-
-        proposal_type = (
-            (self.data.get('proposal_type') if hasattr(self, 'data') and self.data else None)
-            or self.initial.get('proposal_type')
-            or Proposal.PROPOSAL_TYPE_GENERAL
-        )
-        if not Proposal.is_asset_proposal_type(proposal_type):
             return
 
         last = (
