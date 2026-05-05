@@ -1,6 +1,9 @@
+from datetime import timedelta
+
 from django import forms
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 
 from aqua_governance.governance.db_locks import acquire_asset_proposal_transition_lock
 from aqua_governance.governance.models import Proposal
@@ -8,6 +11,14 @@ from aqua_governance.governance.onchain_hooks.validators import validate_asset_p
 from aqua_governance.governance.serializers_v2 import ASSET_FIELDS, ASSET_REQUIRED_TEXT_FIELDS
 from aqua_governance.utils.payments import check_transaction_xdr
 from aqua_governance.utils.widgets import CustomQuillWidget
+
+
+ADMIN_OPTIONAL_FIELDS = (
+    'discord_username',
+    'asset_holder_distribution',
+    'asset_liquidity',
+    'asset_trading_volume',
+)
 
 
 def _value_is_blank(value) -> bool:
@@ -39,8 +50,47 @@ class ProposalAdminForm(forms.ModelForm):
         if 'proposal_status' in self.fields:
             self.fields['proposal_status'].required = False
 
-        if self.instance._state.adding and 'discord_username' in self.fields:
-            self.fields['discord_username'].required = True
+        for field_name in ADMIN_OPTIONAL_FIELDS:
+            if field_name in self.fields:
+                self.fields[field_name].required = False
+
+        if self.instance._state.adding:
+            self._prefill_asset_queue_window()
+
+    def _prefill_asset_queue_window(self):
+        if 'start_at' not in self.fields or 'end_at' not in self.fields:
+            return
+        if self.initial.get('start_at') or self.initial.get('end_at'):
+            return
+
+        proposal_type = (
+            (self.data.get('proposal_type') if hasattr(self, 'data') and self.data else None)
+            or self.initial.get('proposal_type')
+            or Proposal.PROPOSAL_TYPE_GENERAL
+        )
+        if not Proposal.is_asset_proposal_type(proposal_type):
+            return
+
+        last = (
+            Proposal.objects
+            .filter(
+                proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
+                hide=False,
+                draft=False,
+                proposal_status__in=(Proposal.DISCUSSION, Proposal.VOTING),
+                end_at__isnull=False,
+            )
+            .order_by('-end_at')
+            .first()
+        )
+        now = timezone.now()
+        if last and last.end_at > now:
+            start_at = last.end_at + timedelta(seconds=settings.ASSET_QUEUE_GAP_SECONDS)
+        else:
+            start_at = now
+        end_at = start_at + timedelta(days=settings.ASSET_MIN_VOTING_DURATION_DAYS)
+        self.initial['start_at'] = start_at
+        self.initial['end_at'] = end_at
 
     class Meta:
         model = Proposal
@@ -80,9 +130,23 @@ class ProposalAdminForm(forms.ModelForm):
             acquire_asset_proposal_transition_lock()
             asset_lock_acquired = True
             current_proposal_id = None if self.instance._state.adding else self.instance.id
-            if Proposal.has_active_asset_proposal_conflict(current_proposal_id=current_proposal_id):
+            start_at = cleaned_data.get('start_at') or self.instance.start_at
+            end_at = cleaned_data.get('end_at') or self.instance.end_at
+            if not start_at or not end_at:
                 raise ValidationError({
-                    'proposal_type': 'Another asset proposal is already in voting.',
+                    'start_at': 'start_at is required for an active asset proposal.',
+                    'end_at': 'end_at is required for an active asset proposal.',
+                })
+            if end_at and end_at <= timezone.now():
+                raise ValidationError({'end_at': 'end_at must be in the future.'})
+            if Proposal.has_asset_voting_interval_conflict(
+                start_at=start_at,
+                end_at=end_at,
+                current_proposal_id=current_proposal_id,
+            ):
+                raise ValidationError({
+                    'start_at': 'Asset proposal voting interval overlaps with another queued or active asset proposal.',
+                    'end_at': 'Asset proposal voting interval overlaps with another queued or active asset proposal.',
                 })
 
         if self.instance._state.adding:
@@ -98,6 +162,13 @@ class ProposalAdminForm(forms.ModelForm):
                 self._validate_general_payment_fields(cleaned_data)
                 self.instance.draft = True
                 self.instance.action = Proposal.TO_CREATE
+                # General proposals must go through the submit flow to set start_at/end_at;
+                # otherwise the time-based sync task would promote them to VOTING without
+                # a paid submit step.
+                cleaned_data['start_at'] = None
+                cleaned_data['end_at'] = None
+                self.instance.start_at = None
+                self.instance.end_at = None
 
         if not is_asset_proposal and cleaned_data.get('envelope_xdr'):
             payment_status = check_transaction_xdr(cleaned_data, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
@@ -127,6 +198,8 @@ class ProposalAdminForm(forms.ModelForm):
     def _validate_asset_payload(self, cleaned_data):
         errors = {}
         for field_name in ASSET_REQUIRED_TEXT_FIELDS:
+            if field_name in ADMIN_OPTIONAL_FIELDS:
+                continue
             if _value_is_blank(cleaned_data.get(field_name)):
                 errors[field_name] = 'This field is required for asset proposal.'
         if errors:

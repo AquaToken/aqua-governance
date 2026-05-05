@@ -1,8 +1,9 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 from stellar_sdk import Server
 from stellar_sdk.soroban_rpc import GetTransactionStatus
@@ -20,6 +21,41 @@ from aqua_governance.governance.task_logic.vote_indexing import (
 from aqua_governance.taskapp import app as celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _start_due_discussion_proposals(now) -> int:
+    return Proposal.objects.filter(
+        hide=False,
+        draft=False,
+        action=Proposal.NONE,
+        proposal_status=Proposal.DISCUSSION,
+        start_at__lte=now,
+        end_at__gt=now,
+    ).update(proposal_status=Proposal.VOTING)
+
+
+def _finish_due_voting_proposals(now) -> None:
+    proposals = Proposal.objects.filter(
+        hide=False,
+        draft=False,
+        proposal_status=Proposal.VOTING,
+        end_at__lte=now,
+    )
+    for proposal in proposals:
+        proposal.proposal_status = Proposal.VOTED
+        proposal.save(update_fields=['proposal_status'])
+        task_update_proposal_results.delay(proposal.id, True)
+
+
+def _expire_missed_discussion_proposals(now) -> int:
+    return Proposal.objects.filter(
+        hide=False,
+        draft=False,
+        action=Proposal.NONE,
+        proposal_status=Proposal.DISCUSSION,
+        start_at__isnull=False,
+        end_at__lte=now,
+    ).update(proposal_status=Proposal.EXPIRED)
 
 
 def _mark_stale_in_progress_onchain_executions_for_review() -> None:
@@ -48,13 +84,55 @@ def _mark_stale_in_progress_onchain_executions_for_review() -> None:
 @celery_app.task(ignore_result=True)
 def task_update_proposal_status(proposal_id):
     """
-    Update proposal status, votes and results before the end of voting.
+    Update proposal status around the configured voting window.
     """
     proposal = Proposal.objects.get(id=proposal_id)
-    if proposal.end_at <= timezone.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
+    now = timezone.now()
+
+    if proposal.proposal_status == Proposal.VOTED:
+        return
+
+    if (
+        proposal.end_at
+        and proposal.end_at <= now + timedelta(seconds=5)
+        and proposal.proposal_status == Proposal.VOTING
+    ):
         proposal.proposal_status = Proposal.VOTED
-        proposal.save()
+        proposal.save(update_fields=['proposal_status'])
         task_update_proposal_results.delay(proposal.id, True)
+        return
+
+    if (
+        proposal.end_at
+        and proposal.end_at <= now
+        and proposal.proposal_status == Proposal.DISCUSSION
+        and not proposal.draft
+        and not proposal.hide
+        and proposal.action == Proposal.NONE
+    ):
+        proposal.proposal_status = Proposal.EXPIRED
+        proposal.save(update_fields=['proposal_status'])
+        return
+
+    if (
+        proposal.start_at
+        and proposal.end_at
+        and proposal.start_at <= now < proposal.end_at
+        and proposal.proposal_status == Proposal.DISCUSSION
+        and not proposal.draft
+        and not proposal.hide
+        and proposal.action == Proposal.NONE
+    ):
+        proposal.proposal_status = Proposal.VOTING
+        proposal.save(update_fields=['proposal_status'])
+
+
+@celery_app.task(ignore_result=True)
+def task_sync_proposal_statuses_by_time():
+    now = timezone.now()
+    _finish_due_voting_proposals(now)
+    _expire_missed_discussion_proposals(now)
+    _start_due_discussion_proposals(now)
 
 
 @celery_app.task(ignore_result=True)
@@ -62,7 +140,7 @@ def task_update_active_proposals():
     """
     Update active proposals.
     """
-    now = datetime.now()
+    now = timezone.now()
     active_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTING, start_at__lte=now, end_at__gte=now)
 
     for proposal in active_proposals:
@@ -74,8 +152,12 @@ def task_check_expired_proposals():
     """
     Check expired proposals.
     """
-    expired_period = datetime.now() - settings.EXPIRED_TIME
-    proposals = Proposal.objects.filter(proposal_status=Proposal.DISCUSSION, last_updated_at__lte=expired_period)
+    now = timezone.now()
+    expired_period = now - settings.EXPIRED_TIME
+    proposals = Proposal.objects.filter(
+        proposal_status=Proposal.DISCUSSION,
+        last_updated_at__lte=expired_period,
+    ).filter(Q(start_at__isnull=True) | Q(start_at__lte=now))
     proposals.update(proposal_status=Proposal.EXPIRED, action=Proposal.NONE)
 
 

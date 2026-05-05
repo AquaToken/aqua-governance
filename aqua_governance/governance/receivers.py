@@ -7,5 +7,7 @@ from aqua_governance.governance.tasks import task_update_proposal_status
 
 @receiver(post_save, sender=Proposal)
 def save_final_result(sender, instance, created, **kwargs):
-    if instance.voting_time_tracker.has_changed('end_at'):
+    if instance.start_at and instance.voting_time_tracker.has_changed('start_at'):
+        task_update_proposal_status.apply_async((instance.id,), eta=instance.start_at)
+    if instance.end_at and instance.voting_time_tracker.has_changed('end_at'):
         task_update_proposal_status.apply_async((instance.id,), eta=instance.end_at)
