@@ -63,6 +63,14 @@ class ProposalAdminForm(forms.ModelForm):
         if self.initial.get('start_at') or self.initial.get('end_at'):
             return
 
+        proposal_type = (
+            (self.data.get('proposal_type') if hasattr(self, 'data') and self.data else None)
+            or self.initial.get('proposal_type')
+            or Proposal.PROPOSAL_TYPE_GENERAL
+        )
+        if not Proposal.is_asset_proposal_type(proposal_type):
+            return
+
         last = (
             Proposal.objects
             .filter(
@@ -154,6 +162,13 @@ class ProposalAdminForm(forms.ModelForm):
                 self._validate_general_payment_fields(cleaned_data)
                 self.instance.draft = True
                 self.instance.action = Proposal.TO_CREATE
+                # General proposals must go through the submit flow to set start_at/end_at;
+                # otherwise the time-based sync task would promote them to VOTING without
+                # a paid submit step.
+                cleaned_data['start_at'] = None
+                cleaned_data['end_at'] = None
+                self.instance.start_at = None
+                self.instance.end_at = None
 
         if not is_asset_proposal and cleaned_data.get('envelope_xdr'):
             payment_status = check_transaction_xdr(cleaned_data, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
