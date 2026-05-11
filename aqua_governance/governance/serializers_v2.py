@@ -38,15 +38,39 @@ def _value_is_blank(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
+def _get_quill_html(value) -> str:
+    return getattr(value, 'html', '') or ''
+
+
+def _find_pending_duplicate_create(attrs):
+    text_html = _get_quill_html(attrs.get('text'))
+    pending_proposals = Proposal.objects.filter(
+        hide=False,
+        draft=True,
+        action=Proposal.TO_CREATE,
+        proposed_by=attrs.get('proposed_by'),
+        title=attrs.get('title'),
+        proposal_type=attrs.get('proposal_type', Proposal.PROPOSAL_TYPE_GENERAL),
+    ).only('id', 'text')
+
+    for proposal in pending_proposals:
+        if _get_quill_html(proposal.text) == text_html:
+            return proposal
+
+    return None
+
+
 class ProposalListSerializer(serializers.ModelSerializer):
     text = QuillField()
     logvote_set = LogVoteSerializer(many=True)
+    payment_verification_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Proposal
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'vote_for_result', 'vote_against_result',
             'is_simple_proposal', 'aqua_circulating_supply', 'proposal_status', 'payment_status',
+            'payment_verification_status', 'draft', 'action',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'last_updated_at', 'created_at',
             'logvote_set', 'percent_for_quorum', 'ice_circulating_supply', 'vote_for_issuer', 'vote_against_issuer',
             'abstain_issuer', 'vote_abstain_result', 'proposal_type', 'onchain_action_type', 'onchain_action_args',
@@ -58,16 +82,20 @@ class ProposalListSerializer(serializers.ModelSerializer):
             'asset_aquarius_traction', 'asset_issuer_commitments',
         ]
 
+    def get_payment_verification_status(self, obj):
+        return obj.payment_verification_status
+
 
 class ProposalDetailSerializer(serializers.ModelSerializer):
     text = QuillField()
     history_proposal = HistoryProposalSerializer(read_only=True, many=True)
+    payment_verification_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Proposal
         fields = [
             'id', 'version', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'is_simple_proposal',
-            'proposal_status', 'payment_status', 'last_updated_at',
+            'proposal_status', 'payment_status', 'payment_verification_status', 'draft', 'action', 'last_updated_at',
             'vote_for_issuer', 'vote_against_issuer', 'vote_for_result', 'vote_against_result',
             'aqua_circulating_supply', 'discord_channel_url', 'discord_channel_name', 'discord_username',
             'history_proposal', 'created_at', 'percent_for_quorum', 'ice_circulating_supply',
@@ -80,10 +108,14 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
             'asset_aquarius_traction', 'asset_issuer_commitments',
         ]
 
+    def get_payment_verification_status(self, obj):
+        return obj.payment_verification_status
+
 
 class ProposalCreateSerializer(serializers.ModelSerializer):
     text = QuillField()
     discord_username = serializers.CharField(required=True, allow_null=True)
+    payment_verification_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Proposal
@@ -97,11 +129,13 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
             'onchain_action_type', 'onchain_action_args',
             'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
             'onchain_execution_submitted_at', 'onchain_execution_poll_count',
-            'proposal_status', 'payment_status', 'draft', 'last_updated_at', 'created_at',
+            'proposal_status', 'payment_status', 'payment_verification_status', 'draft', 'action',
+            'last_updated_at', 'created_at',
         ]
         read_only_fields = [
             'proposal_status', 'payment_status', 'draft', 'start_at', 'end_at', 'last_updated_at', 'created_at',
             'discord_channel_name', 'discord_channel_url',
+            'action', 'payment_verification_status',
             'onchain_action_type', 'onchain_action_args',
             'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
             'onchain_execution_submitted_at', 'onchain_execution_poll_count',
@@ -110,6 +144,9 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
             'envelope_xdr': {'required': True},
             'transaction_hash': {'required': True},
         }
+
+    def get_payment_verification_status(self, obj):
+        return obj.payment_verification_status
 
     def validate(self, attrs):
         proposal_type = attrs.get('proposal_type', Proposal.PROPOSAL_TYPE_GENERAL)
@@ -120,6 +157,17 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
             self._validate_asset_payload(attrs)
         else:
             raise ValidationError({'proposal_type': 'Unsupported proposal_type value.'})
+
+        duplicate = _find_pending_duplicate_create(attrs)
+        if duplicate:
+            raise ValidationError({
+                'non_field_errors': [
+                    'A matching proposal is already waiting for payment verification. '
+                    'Please wait a few minutes before trying again.',
+                ],
+                'proposal_id': duplicate.id,
+            })
+
         return attrs
 
     def _validate_general_payload(self, attrs):
@@ -192,7 +240,7 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         else:
             validated_data['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_NOT_REQUIRED
         status = check_transaction_xdr(validated_data, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
-        if status != Proposal.FINE:
+        if status not in (Proposal.FINE, Proposal.HORIZON_ERROR):
             validated_data['hide'] = True
         validated_data['payment_status'] = status
         return super(ProposalCreateSerializer, self).create(validated_data)
@@ -202,13 +250,15 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
     text = QuillField(required=False)
     new_text = QuillField()
     discord_username = serializers.CharField(required=False, allow_null=True)
+    payment_verification_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Proposal
         fields = [
             'id', 'version', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'envelope_xdr',
-            'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'proposal_status', 'payment_status', 'payment_verification_status', 'draft', 'action',
+            'last_updated_at', 'created_at',
             'proposal_type',
             'onchain_action_type', 'onchain_action_args',
             'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
@@ -219,6 +269,7 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
             'id', 'proposed_by', 'start_at', 'end_at', 'version', 'title', 'text',
             'discord_channel_url', 'discord_channel_name', 'discord_username',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'payment_verification_status', 'draft', 'action',
             'proposal_type',
             'onchain_action_type', 'onchain_action_args',
             'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
@@ -230,6 +281,9 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
             'new_envelope_xdr': {'required': True},
             'new_transaction_hash': {'required': True},
         }
+
+    def get_payment_verification_status(self, obj):
+        return obj.payment_verification_status
 
     def update(self, instance, validated_data):
         validated_data['action'] = Proposal.TO_UPDATE
@@ -244,13 +298,15 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
 
 class SubmitSerializer(serializers.ModelSerializer):
     text = QuillField(required=False)
+    payment_verification_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Proposal
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'envelope_xdr',
-            'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'proposal_status', 'payment_status', 'payment_verification_status', 'draft', 'action',
+            'last_updated_at', 'created_at',
             'proposal_type', 'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
             'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
             'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
@@ -264,6 +320,7 @@ class SubmitSerializer(serializers.ModelSerializer):
             'id', 'proposed_by', 'title', 'text',
             'discord_channel_url', 'discord_channel_name', 'discord_username',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
+            'payment_verification_status', 'draft', 'action',
             'proposal_type', 'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
             'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
             'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
@@ -278,6 +335,9 @@ class SubmitSerializer(serializers.ModelSerializer):
             'new_envelope_xdr': {'required': True},
             'new_transaction_hash': {'required': True},
         }
+
+    def get_payment_verification_status(self, obj):
+        return obj.payment_verification_status
 
     def validate(self, attrs):
         new_start_at = attrs['new_start_at']
@@ -344,15 +404,21 @@ class SubmitSerializer(serializers.ModelSerializer):
 
 
 class AssetTokenProposalSerializer(serializers.ModelSerializer):
+    payment_verification_status = serializers.SerializerMethodField()
+
     class Meta:
         model = Proposal
         fields = [
-            'id', 'proposal_type', 'proposal_status', 'title',
+            'id', 'proposal_type', 'proposal_status', 'payment_status', 'payment_verification_status',
+            'draft', 'action', 'title',
             'start_at', 'end_at', 'new_start_at', 'new_end_at',
             'vote_for_result', 'vote_against_result', 'vote_abstain_result',
             'onchain_execution_status', 'onchain_execution_tx_hash',
             'created_at', 'last_updated_at',
         ]
+
+    def get_payment_verification_status(self, obj):
+        return obj.payment_verification_status
 
 
 class AssetTokenSerializer(serializers.Serializer):
