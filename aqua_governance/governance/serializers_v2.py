@@ -298,13 +298,28 @@ class SubmitSerializer(serializers.ModelSerializer):
                 'new_end_at': f'Minimum voting duration for this proposal type is {minimum_days} days.',
             })
 
-        if is_asset_proposal and self._has_asset_voting_interval_conflict(
+        if self._has_voting_interval_conflict(
             new_start_at,
             new_end_at,
             self.instance.id,
         ):
-            raise self._asset_voting_interval_conflict_error()
+            raise self._voting_interval_conflict_error()
         return attrs
+
+    @staticmethod
+    def _has_voting_interval_conflict(new_start_at, new_end_at, current_proposal_id: int) -> bool:
+        return Proposal.has_voting_interval_conflict(
+            start_at=new_start_at,
+            end_at=new_end_at,
+            current_proposal_id=current_proposal_id,
+        )
+
+    @staticmethod
+    def _voting_interval_conflict_error() -> ValidationError:
+        return ValidationError({
+            'new_start_at': 'Proposal voting interval overlaps with another queued or active proposal.',
+            'new_end_at': 'Proposal voting interval overlaps with another queued or active proposal.',
+        })
 
     @staticmethod
     def _has_asset_voting_interval_conflict(new_start_at, new_end_at, current_proposal_id: int) -> bool:
@@ -331,15 +346,12 @@ class SubmitSerializer(serializers.ModelSerializer):
             if instance.is_asset_proposal:
                 acquire_asset_proposal_transition_lock()
             locked_instance = Proposal.objects.select_for_update().get(id=instance.id)
-            if (
-                locked_instance.is_asset_proposal
-                and self._has_asset_voting_interval_conflict(
-                    validated_data['new_start_at'],
-                    validated_data['new_end_at'],
-                    locked_instance.id,
-                )
+            if self._has_voting_interval_conflict(
+                validated_data['new_start_at'],
+                validated_data['new_end_at'],
+                locked_instance.id,
             ):
-                raise self._asset_voting_interval_conflict_error()
+                raise self._voting_interval_conflict_error()
             return super(SubmitSerializer, self).update(locked_instance, validated_data)
 
 

@@ -207,6 +207,33 @@ class Proposal(models.Model):
         return queryset.exists()
 
     @classmethod
+    def has_active_voting_proposal_conflict(cls, current_proposal_id=None) -> bool:
+        queryset = cls.objects.filter(
+            hide=False,
+            draft=False,
+            proposal_status=cls.VOTING,
+        )
+        if current_proposal_id is not None:
+            queryset = queryset.exclude(id=current_proposal_id)
+        return queryset.exists()
+
+    @classmethod
+    def has_voting_interval_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
+        queryset = cls.objects.filter(
+            hide=False,
+            draft=False,
+            proposal_status__in=(cls.DISCUSSION, cls.VOTING),
+            start_at__isnull=False,
+            end_at__isnull=False,
+        )
+        if current_proposal_id is not None:
+            queryset = queryset.exclude(id=current_proposal_id)
+        return queryset.filter(
+            start_at__lt=end_at,
+            end_at__gt=start_at,
+        ).exists()
+
+    @classmethod
     def has_asset_voting_interval_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
         queryset = cls.objects.filter(
             proposal_type__in=cls.ASSET_PROPOSAL_TYPES,
@@ -293,6 +320,8 @@ class Proposal(models.Model):
                 if self.end_at and self.end_at <= now:
                     self.proposal_status = self.EXPIRED
                 elif self.start_at and self.start_at > now:
+                    self.proposal_status = self.DISCUSSION
+                elif self.has_active_voting_proposal_conflict(current_proposal_id=self.id):
                     self.proposal_status = self.DISCUSSION
                 else:
                     self.proposal_status = self.VOTING

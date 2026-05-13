@@ -24,14 +24,22 @@ logger = logging.getLogger(__name__)
 
 
 def _start_due_discussion_proposals(now) -> int:
-    return Proposal.objects.filter(
+    started_count = 0
+    proposals = Proposal.objects.filter(
         hide=False,
         draft=False,
         action=Proposal.NONE,
         proposal_status=Proposal.DISCUSSION,
         start_at__lte=now,
         end_at__gt=now,
-    ).update(proposal_status=Proposal.VOTING)
+    ).order_by('start_at', 'id')
+    for proposal in proposals:
+        if Proposal.has_active_voting_proposal_conflict():
+            break
+        proposal.proposal_status = Proposal.VOTING
+        proposal.save(update_fields=['proposal_status'])
+        started_count += 1
+    return started_count
 
 
 def _finish_due_voting_proposals(now) -> None:
@@ -122,6 +130,7 @@ def task_update_proposal_status(proposal_id):
         and not proposal.draft
         and not proposal.hide
         and proposal.action == Proposal.NONE
+        and not Proposal.has_active_voting_proposal_conflict(current_proposal_id=proposal.id)
     ):
         proposal.proposal_status = Proposal.VOTING
         proposal.save(update_fields=['proposal_status'])
