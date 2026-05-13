@@ -157,6 +157,8 @@ def task_check_expired_proposals():
     proposals = Proposal.objects.filter(
         proposal_status=Proposal.DISCUSSION,
         last_updated_at__lte=expired_period,
+    ).exclude(
+        proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
     ).filter(Q(start_at__isnull=True) | Q(start_at__lte=now))
     proposals.update(proposal_status=Proposal.EXPIRED, action=Proposal.NONE)
 
