@@ -41,7 +41,7 @@ def _start_due_discussion_proposals(now) -> int:
         )
         for proposal in proposals:
             locked_proposal = Proposal.objects.select_for_update().get(id=proposal.id)
-            if Proposal.has_blocking_voting_conflict(
+            if Proposal.has_voting_activation_conflict(
                 start_at=locked_proposal.start_at,
                 end_at=locked_proposal.end_at,
                 current_proposal_id=locked_proposal.id,
@@ -155,7 +155,7 @@ def task_update_proposal_status(proposal_id):
                 and not locked_proposal.draft
                 and not locked_proposal.hide
                 and locked_proposal.action == Proposal.NONE
-                and not Proposal.has_blocking_voting_conflict(
+                and not Proposal.has_voting_activation_conflict(
                     start_at=locked_proposal.start_at,
                     end_at=locked_proposal.end_at,
                     current_proposal_id=locked_proposal.id,
