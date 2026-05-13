@@ -256,25 +256,9 @@ class Proposal(models.Model):
 
     @classmethod
     def has_voting_activation_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
-        if cls.has_active_voting_proposal_conflict(current_proposal_id=current_proposal_id):
-            return True
-        if not start_at or not end_at:
-            return False
-
-        queryset = cls.objects.filter(
-            hide=False,
-            draft=False,
-            proposal_status__in=(cls.DISCUSSION, cls.VOTING),
-            action=cls.TO_SUBMIT,
-            payment_status=cls.FINE,
-            new_start_at__isnull=False,
-            new_end_at__isnull=False,
-            new_start_at__lt=end_at,
-            new_end_at__gt=start_at,
+        return cls.has_active_voting_proposal_conflict(
+            current_proposal_id=current_proposal_id,
         )
-        if current_proposal_id is not None:
-            queryset = queryset.exclude(id=current_proposal_id)
-        return queryset.exists()
 
     @property
     def onchain_action_type(self) -> str:
