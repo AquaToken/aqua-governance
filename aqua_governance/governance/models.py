@@ -2,9 +2,10 @@ import requests
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models, transaction
+from django.db.models import Q
 from django.utils import timezone
 
-from aqua_governance.governance.db_locks import acquire_asset_proposal_transition_lock
+from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from django_quill.fields import QuillField
 from model_utils import FieldTracker
 from stellar_sdk import Keypair
@@ -195,18 +196,6 @@ class Proposal(models.Model):
         return self.is_asset_proposal_type(self.proposal_type)
 
     @classmethod
-    def has_active_asset_proposal_conflict(cls, current_proposal_id=None) -> bool:
-        queryset = cls.objects.filter(
-            proposal_type__in=cls.ASSET_PROPOSAL_TYPES,
-            hide=False,
-            draft=False,
-            proposal_status=cls.VOTING,
-        )
-        if current_proposal_id is not None:
-            queryset = queryset.exclude(id=current_proposal_id)
-        return queryset.exists()
-
-    @classmethod
     def has_active_voting_proposal_conflict(cls, current_proposal_id=None) -> bool:
         queryset = cls.objects.filter(
             hide=False,
@@ -218,37 +207,52 @@ class Proposal(models.Model):
         return queryset.exists()
 
     @classmethod
-    def has_voting_interval_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
-        queryset = cls.objects.filter(
-            hide=False,
-            draft=False,
-            proposal_status__in=(cls.DISCUSSION, cls.VOTING),
-            start_at__isnull=False,
-            end_at__isnull=False,
-        )
+    def _has_voting_window_conflict(cls, start_at, end_at, current_proposal_id=None, proposal_type_filter=None) -> bool:
+        if not start_at or not end_at:
+            return False
+
+        queryset = cls.objects.filter(hide=False, draft=False)
+        if proposal_type_filter is not None:
+            queryset = queryset.filter(proposal_type__in=proposal_type_filter)
         if current_proposal_id is not None:
             queryset = queryset.exclude(id=current_proposal_id)
         return queryset.filter(
-            start_at__lt=end_at,
-            end_at__gt=start_at,
+            Q(
+                proposal_status__in=(cls.DISCUSSION, cls.VOTING),
+                start_at__isnull=False,
+                end_at__isnull=False,
+                start_at__lt=end_at,
+                end_at__gt=start_at,
+            )
+            | Q(
+                proposal_status__in=(cls.DISCUSSION, cls.VOTING),
+                action=cls.TO_SUBMIT,
+                payment_status=cls.FINE,
+                new_start_at__isnull=False,
+                new_end_at__isnull=False,
+                new_start_at__lt=end_at,
+                new_end_at__gt=start_at,
+            )
         ).exists()
 
     @classmethod
-    def has_asset_voting_interval_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
-        queryset = cls.objects.filter(
-            proposal_type__in=cls.ASSET_PROPOSAL_TYPES,
-            hide=False,
-            draft=False,
-            proposal_status__in=(cls.DISCUSSION, cls.VOTING),
-            start_at__isnull=False,
-            end_at__isnull=False,
+    def has_voting_interval_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
+        return cls._has_voting_window_conflict(
+            start_at=start_at,
+            end_at=end_at,
+            current_proposal_id=current_proposal_id,
         )
-        if current_proposal_id is not None:
-            queryset = queryset.exclude(id=current_proposal_id)
-        return queryset.filter(
-            start_at__lt=end_at,
-            end_at__gt=start_at,
-        ).exists()
+
+    @classmethod
+    def has_blocking_voting_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
+        return (
+            cls.has_active_voting_proposal_conflict(current_proposal_id=current_proposal_id)
+            or cls.has_voting_interval_conflict(
+                start_at=start_at,
+                end_at=end_at,
+                current_proposal_id=current_proposal_id,
+            )
+        )
 
     @property
     def onchain_action_type(self) -> str:
@@ -303,33 +307,74 @@ class Proposal(models.Model):
         elif self.action == self.TO_SUBMIT:
             status = check_proposal_status(self.new_transaction_hash, self.text.html, settings.PROPOSAL_SUBMIT_COST)
             if status == self.FINE:
-                HistoryProposal.objects.create(
-                    version=self.version,
-                    hide=True,
-                    title=self.title,
-                    text=self.text,
-                    transaction_hash=self.transaction_hash,
-                    envelope_xdr=self.envelope_xdr,
-                    proposal=self,
-                    created_at=self.last_updated_at,
-                )
-                now = timezone.now()
-                self.payment_status = status
-                self.start_at = self.new_start_at
-                self.end_at = self.new_end_at
-                if self.end_at and self.end_at <= now:
-                    self.proposal_status = self.EXPIRED
-                elif self.start_at and self.start_at > now:
-                    self.proposal_status = self.DISCUSSION
-                elif self.has_active_voting_proposal_conflict(current_proposal_id=self.id):
-                    self.proposal_status = self.DISCUSSION
-                else:
-                    self.proposal_status = self.VOTING
-                self.last_updated_at = now
-                self.transaction_hash = self.new_transaction_hash
-                self.envelope_xdr = self.new_envelope_xdr
-                self.action = self.NONE
-                self.save()
+                with transaction.atomic():
+                    acquire_proposal_transition_lock()
+                    locked_proposal = Proposal.objects.select_for_update().get(id=self.id)
+                    if locked_proposal.action != self.TO_SUBMIT:
+                        self.refresh_from_db()
+                        return
+
+                    now = timezone.now()
+                    new_start_at = locked_proposal.new_start_at
+                    new_end_at = locked_proposal.new_end_at
+                    voting_interval_conflict = Proposal.has_voting_interval_conflict(
+                        start_at=new_start_at,
+                        end_at=new_end_at,
+                        current_proposal_id=locked_proposal.id,
+                    )
+
+                    def create_submit_history():
+                        HistoryProposal.objects.create(
+                            version=locked_proposal.version,
+                            hide=True,
+                            title=locked_proposal.title,
+                            text=locked_proposal.text,
+                            transaction_hash=locked_proposal.transaction_hash,
+                            envelope_xdr=locked_proposal.envelope_xdr,
+                            proposal=locked_proposal,
+                            created_at=locked_proposal.last_updated_at,
+                        )
+
+                    def apply_submit_window(proposal_status):
+                        create_submit_history()
+                        locked_proposal.payment_status = status
+                        locked_proposal.start_at = new_start_at
+                        locked_proposal.end_at = new_end_at
+                        locked_proposal.proposal_status = proposal_status
+                        locked_proposal.last_updated_at = now
+                        locked_proposal.transaction_hash = locked_proposal.new_transaction_hash
+                        locked_proposal.envelope_xdr = locked_proposal.new_envelope_xdr
+                        locked_proposal.action = self.NONE
+                        locked_proposal.save()
+
+                    if new_end_at and new_end_at <= now:
+                        apply_submit_window(self.EXPIRED)
+                    elif voting_interval_conflict:
+                        locked_proposal.payment_status = status
+                        locked_proposal.action = self.NONE
+                        locked_proposal.new_start_at = None
+                        locked_proposal.new_end_at = None
+                        locked_proposal.new_envelope_xdr = None
+                        locked_proposal.new_transaction_hash = None
+                        locked_proposal.last_updated_at = now
+                        locked_proposal.save(update_fields=[
+                            'payment_status',
+                            'action',
+                            'new_start_at',
+                            'new_end_at',
+                            'new_envelope_xdr',
+                            'new_transaction_hash',
+                            'last_updated_at',
+                        ])
+                    else:
+                        if new_start_at and new_start_at > now:
+                            proposal_status = self.DISCUSSION
+                        elif Proposal.has_active_voting_proposal_conflict(current_proposal_id=locked_proposal.id):
+                            proposal_status = self.DISCUSSION
+                        else:
+                            proposal_status = self.VOTING
+                        apply_submit_window(proposal_status)
+                    self.refresh_from_db()
             else:
                 self.payment_status = status
                 self.save()
@@ -340,7 +385,7 @@ class Proposal(models.Model):
             if not (status == self.HORIZON_ERROR and self.status == self.HORIZON_ERROR):
                 if self.is_asset_proposal and status != self.HORIZON_ERROR:
                     with transaction.atomic():
-                        acquire_asset_proposal_transition_lock()
+                        acquire_proposal_transition_lock()
                         locked_proposal = Proposal.objects.select_for_update().get(id=self.id)
                         if locked_proposal.action == self.TO_CREATE:
                             locked_proposal.draft = False

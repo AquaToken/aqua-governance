@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.core.exceptions import PermissionDenied
+from django.db import transaction
 
 from aqua_governance.governance.forms import ProposalAdminForm
 from aqua_governance.governance.models import LogVote, Proposal
@@ -50,6 +51,12 @@ class ProposalAdmin(admin.ModelAdmin):
         css = {
             'all': ('admin/django_quill.css',),
         }
+
+    def changeform_view(self, request, object_id=None, form_url='', extra_context=None):
+        if request.method == 'POST':
+            with transaction.atomic():
+                return super().changeform_view(request, object_id, form_url, extra_context)
+        return super().changeform_view(request, object_id, form_url, extra_context)
 
     def get_form(self, request, obj=None, change=False, **kwargs):
         form_class = super().get_form(request, obj, change=change, **kwargs)
