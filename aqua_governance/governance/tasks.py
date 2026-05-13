@@ -164,6 +164,24 @@ def task_check_expired_proposals():
 
 
 @celery_app.task(ignore_result=True)
+def task_check_pending_proposal_payments():
+    """
+    Retry proposals whose payment verification is still pending.
+    """
+    proposals = Proposal.objects.filter(
+        hide=False,
+        draft=True,
+        action=Proposal.TO_CREATE,
+        proposal_status=Proposal.DISCUSSION,
+    ).filter(
+        payment_status__in=[Proposal.FINE, Proposal.HORIZON_ERROR],
+    ).order_by('created_at')
+
+    for proposal in proposals:
+        proposal.check_transaction()
+
+
+@celery_app.task(ignore_result=True)
 def task_update_proposal_results(proposal_id: int, freezing_amount: bool = False):
     task_update_votes(proposal_id, freezing_amount)
     update_proposal_final_results(proposal_id)
