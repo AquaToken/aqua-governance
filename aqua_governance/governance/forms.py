@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from aqua_governance.governance.models import Proposal
-from aqua_governance.governance.onchain_hooks.validators import validate_asset_payload
+from aqua_governance.governance.asset_payload import validate_asset_payload
 from aqua_governance.governance.serializers_v2 import ASSET_FIELDS, ASSET_REQUIRED_TEXT_FIELDS
 from aqua_governance.utils.payments import check_transaction_xdr
 from aqua_governance.utils.widgets import CustomQuillWidget

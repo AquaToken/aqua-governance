@@ -1,22 +1,24 @@
 import requests
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import models, transaction
+from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 
-from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
+from aqua_governance.governance.onchain_actions import derive_proposal_onchain_action_args
+from aqua_governance.governance import payment_statuses
+from aqua_governance.governance.proposal_transactions import check_transaction as check_proposal_transaction
 from django_quill.fields import QuillField
 from model_utils import FieldTracker
 from stellar_sdk import Keypair
 
 
 class Proposal(models.Model):
-    HORIZON_ERROR = 'HORIZON_ERROR'
-    BAD_MEMO = 'BAD_MEMO'
-    INVALID_PAYMENT = 'INVALID_PAYMENT'
-    FINE = 'FINE'
-    FAILED_TRANSACTION = 'FAILED_TRANSACTION'
+    HORIZON_ERROR = payment_statuses.HORIZON_ERROR
+    BAD_MEMO = payment_statuses.BAD_MEMO
+    INVALID_PAYMENT = payment_statuses.INVALID_PAYMENT
+    FINE = payment_statuses.FINE
+    FAILED_TRANSACTION = payment_statuses.FAILED_TRANSACTION
 
     PROPOSAL_STATUS_CHOICES = (
         (HORIZON_ERROR, 'Bad horizon response'),
@@ -273,143 +275,14 @@ class Proposal(models.Model):
         if not self.is_asset_proposal:
             return []
 
-        from aqua_governance.governance.onchain_hooks.validators import derive_onchain_action_args
-
-        return derive_onchain_action_args(
+        return derive_proposal_onchain_action_args(
             asset_code=self.asset_code,
             asset_issuer=self.asset_issuer,
             asset_contract_address=self.asset_contract_address,
         )
 
     def check_transaction(self):
-        from aqua_governance.utils.payments import check_proposal_status
-
-        if self.action == self.TO_UPDATE:
-            status = check_proposal_status(self.new_transaction_hash, self.new_text.html,
-                                           settings.PROPOSAL_CREATE_OR_UPDATE_COST)
-            if status == self.FINE:
-                HistoryProposal.objects.create(
-                    version=self.version,
-                    title=self.title,
-                    text=self.text,
-                    transaction_hash=self.transaction_hash,
-                    envelope_xdr=self.envelope_xdr,
-                    proposal=self,
-                    created_at=self.last_updated_at,
-                )
-                self.payment_status = status
-                self.last_updated_at = timezone.now()
-                self.text = self.new_text
-                self.title = self.new_title
-                self.version = self.version + 1
-                self.transaction_hash = self.new_transaction_hash
-                self.envelope_xdr = self.new_envelope_xdr
-                self.action = self.NONE
-                self.save()
-            else:
-                self.payment_status = status
-                self.save()
-
-        elif self.action == self.TO_SUBMIT:
-            status = check_proposal_status(self.new_transaction_hash, self.text.html, settings.PROPOSAL_SUBMIT_COST)
-            if status == self.FINE:
-                with transaction.atomic():
-                    acquire_proposal_transition_lock()
-                    locked_proposal = Proposal.objects.select_for_update().get(id=self.id)
-                    if locked_proposal.action != self.TO_SUBMIT:
-                        self.refresh_from_db()
-                        return
-
-                    now = timezone.now()
-                    new_start_at = locked_proposal.new_start_at
-                    new_end_at = locked_proposal.new_end_at
-                    voting_interval_conflict = Proposal.has_voting_interval_conflict(
-                        start_at=new_start_at,
-                        end_at=new_end_at,
-                        current_proposal_id=locked_proposal.id,
-                    )
-
-                    def create_submit_history():
-                        HistoryProposal.objects.create(
-                            version=locked_proposal.version,
-                            hide=True,
-                            title=locked_proposal.title,
-                            text=locked_proposal.text,
-                            transaction_hash=locked_proposal.transaction_hash,
-                            envelope_xdr=locked_proposal.envelope_xdr,
-                            proposal=locked_proposal,
-                            created_at=locked_proposal.last_updated_at,
-                        )
-
-                    def apply_submit_window(proposal_status):
-                        create_submit_history()
-                        locked_proposal.payment_status = status
-                        locked_proposal.start_at = new_start_at
-                        locked_proposal.end_at = new_end_at
-                        locked_proposal.proposal_status = proposal_status
-                        locked_proposal.last_updated_at = now
-                        locked_proposal.transaction_hash = locked_proposal.new_transaction_hash
-                        locked_proposal.envelope_xdr = locked_proposal.new_envelope_xdr
-                        locked_proposal.action = self.NONE
-                        locked_proposal.save()
-
-                    if new_end_at and new_end_at <= now:
-                        apply_submit_window(self.EXPIRED)
-                    elif voting_interval_conflict:
-                        locked_proposal.payment_status = status
-                        locked_proposal.action = self.NONE
-                        locked_proposal.new_start_at = None
-                        locked_proposal.new_end_at = None
-                        locked_proposal.new_envelope_xdr = None
-                        locked_proposal.new_transaction_hash = None
-                        locked_proposal.last_updated_at = now
-                        locked_proposal.save(update_fields=[
-                            'payment_status',
-                            'action',
-                            'new_start_at',
-                            'new_end_at',
-                            'new_envelope_xdr',
-                            'new_transaction_hash',
-                            'last_updated_at',
-                        ])
-                    else:
-                        if new_start_at and new_start_at > now:
-                            proposal_status = self.DISCUSSION
-                        elif Proposal.has_active_voting_proposal_conflict(current_proposal_id=locked_proposal.id):
-                            proposal_status = self.DISCUSSION
-                        else:
-                            proposal_status = self.VOTING
-                        apply_submit_window(proposal_status)
-                    self.refresh_from_db()
-            else:
-                self.payment_status = status
-                self.save()
-
-        elif self.action == self.TO_CREATE:
-            status = check_proposal_status(self.transaction_hash, self.text.html,
-                                           settings.PROPOSAL_CREATE_OR_UPDATE_COST)
-            if not (status == self.HORIZON_ERROR and self.status == self.HORIZON_ERROR):
-                if self.is_asset_proposal and status != self.HORIZON_ERROR:
-                    with transaction.atomic():
-                        acquire_proposal_transition_lock()
-                        locked_proposal = Proposal.objects.select_for_update().get(id=self.id)
-                        if locked_proposal.action == self.TO_CREATE:
-                            locked_proposal.draft = False
-                            locked_proposal.action = self.NONE
-                            locked_proposal.last_updated_at = timezone.now()
-                            if status != self.FINE:
-                                locked_proposal.hide = True
-                            locked_proposal.payment_status = status
-                            locked_proposal.save()
-                    self.refresh_from_db()
-                else:
-                    if status != self.HORIZON_ERROR:
-                        self.draft = False
-                        self.action = self.NONE
-                        if status != self.FINE:
-                            self.hide = True
-                    self.payment_status = status
-                    self.save()
+        check_proposal_transaction(self)
 
     def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
         if not self.vote_against_issuer:

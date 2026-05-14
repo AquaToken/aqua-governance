@@ -8,7 +8,7 @@ from rest_framework.exceptions import ValidationError
 
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from aqua_governance.governance.models import Proposal, HistoryProposal
-from aqua_governance.governance.onchain_hooks.validators import validate_asset_payload
+from aqua_governance.governance.asset_payload import validate_asset_payload
 from aqua_governance.governance.serializer_fields import QuillField
 from aqua_governance.governance.serializers import HistoryProposalSerializer, LogVoteSerializer
 from aqua_governance.utils.payments import check_transaction_xdr
