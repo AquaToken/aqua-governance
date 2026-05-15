@@ -6,7 +6,6 @@ from django.utils import timezone
 
 from aqua_governance.governance.db_locks import acquire_asset_proposal_transition_lock
 from django_quill.fields import QuillField
-from model_utils import FieldTracker
 from stellar_sdk import Keypair
 
 
@@ -180,8 +179,6 @@ class Proposal(models.Model):
     onchain_execution_started_at = models.DateTimeField(null=True, blank=True)
     onchain_execution_submitted_at = models.DateTimeField(null=True, blank=True)
     onchain_execution_poll_count = models.PositiveIntegerField(default=0)
-
-    voting_time_tracker = FieldTracker(fields=['start_at', 'end_at'])
 
     def __str__(self):
         return str(self.id)
