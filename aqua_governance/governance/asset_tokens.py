@@ -1,10 +1,10 @@
 from aqua_governance.governance.models import Proposal
-from aqua_governance.governance.onchain_hooks.validators import derive_onchain_action_args
+from aqua_governance.governance.onchain_actions import derive_proposal_onchain_action_args
 
 
 def canonical_asset_key(proposal) -> str:
     try:
-        args = derive_onchain_action_args(
+        args = derive_proposal_onchain_action_args(
             asset_code=proposal.asset_code,
             asset_issuer=proposal.asset_issuer,
             asset_contract_address=proposal.asset_contract_address,

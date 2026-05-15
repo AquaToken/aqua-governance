@@ -6,9 +6,9 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
-from aqua_governance.governance.db_locks import acquire_asset_proposal_transition_lock
+from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from aqua_governance.governance.models import Proposal, HistoryProposal
-from aqua_governance.governance.onchain_hooks.validators import validate_asset_payload
+from aqua_governance.governance.asset_payload import validate_asset_payload
 from aqua_governance.governance.serializer_fields import QuillField
 from aqua_governance.governance.serializers import HistoryProposalSerializer, LogVoteSerializer
 from aqua_governance.utils.payments import check_transaction_xdr
@@ -120,7 +120,25 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
             self._validate_asset_payload(attrs)
         else:
             raise ValidationError({'proposal_type': 'Unsupported proposal_type value.'})
+        self._validate_no_matching_pending_create(attrs)
         return attrs
+
+    @staticmethod
+    def _validate_no_matching_pending_create(attrs):
+        pending_proposal = Proposal.objects.filter(
+            proposed_by=attrs.get('proposed_by'),
+            title=attrs.get('title'),
+            proposal_type=attrs.get('proposal_type', Proposal.PROPOSAL_TYPE_GENERAL),
+            draft=True,
+            hide=False,
+            action=Proposal.TO_CREATE,
+            payment_status=Proposal.FINE,
+        ).first()
+        if pending_proposal:
+            raise ValidationError({
+                'proposal_id': pending_proposal.id,
+                'non_field_errors': 'Please wait a few minutes while the pending proposal payment is checked.',
+            })
 
     def _validate_general_payload(self, attrs):
         errors = {}
@@ -192,7 +210,7 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         else:
             validated_data['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_NOT_REQUIRED
         status = check_transaction_xdr(validated_data, settings.PROPOSAL_CREATE_OR_UPDATE_COST)
-        if status != Proposal.FINE:
+        if status not in (Proposal.FINE, Proposal.HORIZON_ERROR):
             validated_data['hide'] = True
         validated_data['payment_status'] = status
         return super(ProposalCreateSerializer, self).create(validated_data)
@@ -298,27 +316,27 @@ class SubmitSerializer(serializers.ModelSerializer):
                 'new_end_at': f'Minimum voting duration for this proposal type is {minimum_days} days.',
             })
 
-        if is_asset_proposal and self._has_asset_voting_interval_conflict(
+        if self._has_voting_interval_conflict(
             new_start_at,
             new_end_at,
             self.instance.id,
         ):
-            raise self._asset_voting_interval_conflict_error()
+            raise self._voting_interval_conflict_error()
         return attrs
 
     @staticmethod
-    def _has_asset_voting_interval_conflict(new_start_at, new_end_at, current_proposal_id: int) -> bool:
-        return Proposal.has_asset_voting_interval_conflict(
+    def _has_voting_interval_conflict(new_start_at, new_end_at, current_proposal_id: int) -> bool:
+        return Proposal.has_voting_interval_conflict(
             start_at=new_start_at,
             end_at=new_end_at,
             current_proposal_id=current_proposal_id,
         )
 
     @staticmethod
-    def _asset_voting_interval_conflict_error() -> ValidationError:
+    def _voting_interval_conflict_error() -> ValidationError:
         return ValidationError({
-            'new_start_at': 'Asset proposal voting interval overlaps with another queued or active asset proposal.',
-            'new_end_at': 'Asset proposal voting interval overlaps with another queued or active asset proposal.',
+            'new_start_at': 'Proposal voting interval overlaps with another queued or active proposal.',
+            'new_end_at': 'Proposal voting interval overlaps with another queued or active proposal.',
         })
 
     def update(self, instance, validated_data):
@@ -328,18 +346,14 @@ class SubmitSerializer(serializers.ModelSerializer):
         validated_data['payment_status'] = status
 
         with transaction.atomic():
-            if instance.is_asset_proposal:
-                acquire_asset_proposal_transition_lock()
+            acquire_proposal_transition_lock()
             locked_instance = Proposal.objects.select_for_update().get(id=instance.id)
-            if (
-                locked_instance.is_asset_proposal
-                and self._has_asset_voting_interval_conflict(
-                    validated_data['new_start_at'],
-                    validated_data['new_end_at'],
-                    locked_instance.id,
-                )
+            if self._has_voting_interval_conflict(
+                validated_data['new_start_at'],
+                validated_data['new_end_at'],
+                locked_instance.id,
             ):
-                raise self._asset_voting_interval_conflict_error()
+                raise self._voting_interval_conflict_error()
             return super(SubmitSerializer, self).update(locked_instance, validated_data)
 
 

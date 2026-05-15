@@ -5,9 +5,9 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from aqua_governance.governance.db_locks import acquire_asset_proposal_transition_lock
+from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from aqua_governance.governance.models import Proposal
-from aqua_governance.governance.onchain_hooks.validators import validate_asset_payload
+from aqua_governance.governance.asset_payload import validate_asset_payload
 from aqua_governance.governance.serializers_v2 import ASSET_FIELDS, ASSET_REQUIRED_TEXT_FIELDS
 from aqua_governance.utils.payments import check_transaction_xdr
 from aqua_governance.utils.widgets import CustomQuillWidget
@@ -69,7 +69,6 @@ class ProposalAdminForm(forms.ModelForm):
         last = (
             Proposal.objects
             .filter(
-                proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
                 hide=False,
                 draft=False,
                 proposal_status__in=(Proposal.DISCUSSION, Proposal.VOTING),
@@ -115,39 +114,52 @@ class ProposalAdminForm(forms.ModelForm):
         else:
             raise ValidationError({'proposal_type': 'Unsupported proposal_type value.'})
 
-        asset_lock_acquired = False
-        target_status = (
-            cleaned_data.get('proposal_status')
-            or self.instance.proposal_status
-            or Proposal.DISCUSSION
-        )
-        if is_asset_proposal and target_status == Proposal.VOTING:
-            acquire_asset_proposal_transition_lock()
-            asset_lock_acquired = True
-            current_proposal_id = None if self.instance._state.adding else self.instance.id
-            start_at = cleaned_data.get('start_at') or self.instance.start_at
-            end_at = cleaned_data.get('end_at') or self.instance.end_at
-            if not start_at or not end_at:
+        interval_lock_acquired = False
+        if 'proposal_status' in cleaned_data:
+            target_status = cleaned_data['proposal_status']
+        else:
+            target_status = self.instance.proposal_status
+        target_status = target_status or Proposal.DISCUSSION
+
+        if 'start_at' in cleaned_data:
+            start_at = cleaned_data['start_at']
+        else:
+            start_at = self.instance.start_at
+        if 'end_at' in cleaned_data:
+            end_at = cleaned_data['end_at']
+        else:
+            end_at = self.instance.end_at
+
+        if self.instance._state.adding and not is_asset_proposal:
+            start_at = None
+            end_at = None
+
+        if target_status in (Proposal.DISCUSSION, Proposal.VOTING):
+            acquire_proposal_transition_lock()
+            interval_lock_acquired = True
+            if target_status == Proposal.VOTING and (not start_at or not end_at):
                 raise ValidationError({
-                    'start_at': 'start_at is required for an active asset proposal.',
-                    'end_at': 'end_at is required for an active asset proposal.',
+                    'start_at': 'start_at is required for an active proposal.',
+                    'end_at': 'end_at is required for an active proposal.',
                 })
-            if end_at and end_at <= timezone.now():
-                raise ValidationError({'end_at': 'end_at must be in the future.'})
-            if Proposal.has_asset_voting_interval_conflict(
-                start_at=start_at,
-                end_at=end_at,
-                current_proposal_id=current_proposal_id,
-            ):
-                raise ValidationError({
-                    'start_at': 'Asset proposal voting interval overlaps with another queued or active asset proposal.',
-                    'end_at': 'Asset proposal voting interval overlaps with another queued or active asset proposal.',
-                })
+            if start_at and end_at:
+                if end_at <= timezone.now():
+                    raise ValidationError({'end_at': 'end_at must be in the future.'})
+                current_proposal_id = None if self.instance._state.adding else self.instance.id
+                if Proposal.has_voting_interval_conflict(
+                    start_at=start_at,
+                    end_at=end_at,
+                    current_proposal_id=current_proposal_id,
+                ):
+                    raise ValidationError({
+                        'start_at': 'Proposal voting interval overlaps with another queued or active proposal.',
+                        'end_at': 'Proposal voting interval overlaps with another queued or active proposal.',
+                    })
 
         if self.instance._state.adding:
             if is_asset_proposal:
-                if not asset_lock_acquired:
-                    acquire_asset_proposal_transition_lock()
+                if not interval_lock_acquired:
+                    acquire_proposal_transition_lock()
                 # Temporary admin-only path: asset proposals are created without payment/XDR.
                 self.instance.draft = False
                 self.instance.action = Proposal.NONE

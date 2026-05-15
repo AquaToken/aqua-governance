@@ -3,11 +3,13 @@ from datetime import timedelta
 from typing import Optional
 
 from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from stellar_sdk import Server
 from stellar_sdk.soroban_rpc import GetTransactionStatus
 
+from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from aqua_governance.governance.models import Proposal
 from aqua_governance.governance.onchain_hooks import execute_onchain_action
 from aqua_governance.governance.onchain_hooks.soroban import get_soroban_transaction
@@ -24,14 +26,33 @@ logger = logging.getLogger(__name__)
 
 
 def _start_due_discussion_proposals(now) -> int:
-    return Proposal.objects.filter(
-        hide=False,
-        draft=False,
-        action=Proposal.NONE,
-        proposal_status=Proposal.DISCUSSION,
-        start_at__lte=now,
-        end_at__gt=now,
-    ).update(proposal_status=Proposal.VOTING)
+    started_count = 0
+    with transaction.atomic():
+        acquire_proposal_transition_lock()
+        proposals = list(
+            Proposal.objects.filter(
+                hide=False,
+                draft=False,
+                action=Proposal.NONE,
+                proposal_status=Proposal.DISCUSSION,
+                start_at__lte=now,
+                end_at__gt=now,
+            ).order_by('start_at', 'id'),
+        )
+        for proposal in proposals:
+            locked_proposal = Proposal.objects.select_for_update().get(id=proposal.id)
+            if Proposal.has_voting_activation_conflict(
+                start_at=locked_proposal.start_at,
+                end_at=locked_proposal.end_at,
+                current_proposal_id=locked_proposal.id,
+            ):
+                continue
+            locked_proposal.proposal_status = Proposal.VOTING
+            locked_proposal.save(update_fields=['proposal_status'])
+            started_count += 1
+            # The global voting invariant allows only one proposal to be active at a time.
+            break
+    return started_count
 
 
 def _finish_due_voting_proposals(now) -> None:
@@ -123,8 +144,25 @@ def task_update_proposal_status(proposal_id):
         and not proposal.hide
         and proposal.action == Proposal.NONE
     ):
-        proposal.proposal_status = Proposal.VOTING
-        proposal.save(update_fields=['proposal_status'])
+        with transaction.atomic():
+            acquire_proposal_transition_lock()
+            locked_proposal = Proposal.objects.select_for_update().get(id=proposal_id)
+            if (
+                locked_proposal.start_at
+                and locked_proposal.end_at
+                and locked_proposal.start_at <= now < locked_proposal.end_at
+                and locked_proposal.proposal_status == Proposal.DISCUSSION
+                and not locked_proposal.draft
+                and not locked_proposal.hide
+                and locked_proposal.action == Proposal.NONE
+                and not Proposal.has_voting_activation_conflict(
+                    start_at=locked_proposal.start_at,
+                    end_at=locked_proposal.end_at,
+                    current_proposal_id=locked_proposal.id,
+                )
+            ):
+                locked_proposal.proposal_status = Proposal.VOTING
+                locked_proposal.save(update_fields=['proposal_status'])
 
 
 @celery_app.task(ignore_result=True)
@@ -161,6 +199,15 @@ def task_check_expired_proposals():
         proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
     ).filter(Q(start_at__isnull=True) | Q(start_at__lte=now))
     proposals.update(proposal_status=Proposal.EXPIRED, action=Proposal.NONE)
+
+
+@celery_app.task(ignore_result=True)
+def task_check_pending_proposal_payments():
+    proposals = Proposal.objects.filter(
+        hide=False,
+    ).exclude(action=Proposal.NONE)
+    for proposal in proposals:
+        proposal.check_transaction()
 
 
 @celery_app.task(ignore_result=True)
