@@ -173,8 +173,17 @@ if CELERY_ENABLED:
     # window cannot wait indefinitely on a stuck onchain polling task. The soft
     # limit raises SoftTimeLimitExceeded inside the task (worker can clean up),
     # the hard limit terminates the worker child after the grace period.
-    CELERY_TASK_SOFT_TIME_LIMIT = env.int('CELERY_TASK_SOFT_TIME_LIMIT', default=60)
-    CELERY_TASK_TIME_LIMIT = env.int('CELERY_TASK_TIME_LIMIT', default=90)
+    #
+    # IMPORTANT: both limits MUST stay strictly greater than ONCHAIN_SOROBAN_TIMEOUT
+    # (declared below). If the celery hard limit fires WHILE a Soroban RPC submit
+    # is still pending its server-side ack, the worker gets SIGKILLed AFTER the
+    # transaction may have already been broadcast on chain but BEFORE the Python
+    # frame can persist its tx_hash. That orphans a real onchain tx and lights up
+    # the retry path → silent double-submission risk. See finding X1 in the
+    # 2026-05-21-stage-2-single-shot-findings audit. The assert at the bottom of
+    # this block enforces the invariant against env-var overrides.
+    CELERY_TASK_SOFT_TIME_LIMIT = env.int('CELERY_TASK_SOFT_TIME_LIMIT', default=150)
+    CELERY_TASK_TIME_LIMIT = env.int('CELERY_TASK_TIME_LIMIT', default=180)
 
 
 # Rest framework configuration
@@ -255,6 +264,37 @@ ONCHAIN_SOROBAN_TIMEOUT = env.int('ONCHAIN_SOROBAN_TIMEOUT', default=120)
 ONCHAIN_EXECUTION_LEASE_SECONDS = env.int('ONCHAIN_EXECUTION_LEASE_SECONDS', default=300)
 ONCHAIN_TX_MAX_POLLS = env.int('ONCHAIN_TX_MAX_POLLS', default=20)
 ONCHAIN_TX_POLL_INTERVAL_SECONDS = env.int('ONCHAIN_TX_POLL_INTERVAL_SECONDS', default=3)
+
+
+# Invariants between Celery and Soroban timeouts (audit finding X1).
+# --------------------------------------------------------------------------
+# If Celery's hard time-limit fires while a Soroban RPC `sendTransaction` is still
+# pending its ack, the worker gets SIGKILLed AFTER the tx may have been broadcast
+# but BEFORE Python persists the tx_hash. Result: orphan onchain tx + retry path
+# silent double-submission. Both Celery limits MUST exceed Soroban timeout with
+# enough headroom for the RPC response to arrive and the Python frame to write.
+if CELERY_ENABLED:
+    assert CELERY_TASK_SOFT_TIME_LIMIT > ONCHAIN_SOROBAN_TIMEOUT, (
+        'CELERY_TASK_SOFT_TIME_LIMIT ({}) must be greater than ONCHAIN_SOROBAN_TIMEOUT ({}). '
+        'Otherwise the Celery soft kill fires inside a still-pending Soroban RPC submit. '
+        'See audit finding X1 (2026-05-21-stage-2-single-shot-findings).'.format(
+            CELERY_TASK_SOFT_TIME_LIMIT, ONCHAIN_SOROBAN_TIMEOUT,
+        )
+    )
+    assert CELERY_TASK_TIME_LIMIT > ONCHAIN_SOROBAN_TIMEOUT, (
+        'CELERY_TASK_TIME_LIMIT ({}) must be greater than ONCHAIN_SOROBAN_TIMEOUT ({}). '
+        'Otherwise the Celery hard kill SIGKILLs the worker mid-RPC, orphaning any '
+        'broadcast transaction and enabling silent double-submission on retry. '
+        'See audit finding X1 (2026-05-21-stage-2-single-shot-findings).'.format(
+            CELERY_TASK_TIME_LIMIT, ONCHAIN_SOROBAN_TIMEOUT,
+        )
+    )
+    assert CELERY_TASK_TIME_LIMIT >= CELERY_TASK_SOFT_TIME_LIMIT, (
+        'CELERY_TASK_TIME_LIMIT ({}) must be >= CELERY_TASK_SOFT_TIME_LIMIT ({}). '
+        'Celery semantics: hard limit cannot be lower than soft limit.'.format(
+            CELERY_TASK_TIME_LIMIT, CELERY_TASK_SOFT_TIME_LIMIT,
+        )
+    )
 
 # Discord info
 # --------------------------------------------------------------------------
