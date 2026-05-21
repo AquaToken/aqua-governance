@@ -6,32 +6,19 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
+from aqua_governance.governance.asset_proposal_writer import asset_data_from_proposal, upsert_asset_records
+from aqua_governance.governance.asset_serializer_fields import (
+    ASSET_FIELDS,
+    ASSET_IDENTIFIER_FIELDS,
+    ASSET_REQUIRED_TEXT_FIELDS,
+    asset_read_fields as _asset_read_fields,
+)
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from aqua_governance.governance.models import Proposal, HistoryProposal
 from aqua_governance.governance.asset_payload import validate_asset_payload
 from aqua_governance.governance.serializer_fields import QuillField
 from aqua_governance.governance.serializers import HistoryProposalSerializer, LogVoteSerializer
 from aqua_governance.utils.payments import check_transaction_xdr
-
-ASSET_REQUIRED_TEXT_FIELDS = (
-    'asset_issuer_information',
-    'asset_token_description',
-    'asset_holder_distribution',
-    'asset_liquidity',
-    'asset_trading_volume',
-    'asset_audit_info',
-    'asset_stellar_flags',
-    'asset_related_projects',
-    'asset_community_references',
-    'asset_aquarius_traction',
-    'asset_issuer_commitments',
-)
-ASSET_IDENTIFIER_FIELDS = (
-    'asset_code',
-    'asset_issuer',
-    'asset_contract_address',
-)
-ASSET_FIELDS = ASSET_IDENTIFIER_FIELDS + ASSET_REQUIRED_TEXT_FIELDS
 
 
 def _value_is_blank(value) -> bool:
@@ -41,6 +28,9 @@ def _value_is_blank(value) -> bool:
 class ProposalListSerializer(serializers.ModelSerializer):
     text = QuillField()
     logvote_set = LogVoteSerializer(many=True)
+
+    # Asset payload fields sourced via FK chain (Stage 2 single-shot).
+    locals().update(_asset_read_fields())
 
     class Meta:
         model = Proposal
@@ -52,16 +42,15 @@ class ProposalListSerializer(serializers.ModelSerializer):
             'abstain_issuer', 'vote_abstain_result', 'proposal_type', 'onchain_action_type', 'onchain_action_args',
             'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
             'onchain_execution_submitted_at', 'onchain_execution_poll_count',
-            'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
-            'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
-            'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
-            'asset_aquarius_traction', 'asset_issuer_commitments',
+            *ASSET_FIELDS,
         ]
 
 
 class ProposalDetailSerializer(serializers.ModelSerializer):
     text = QuillField()
     history_proposal = HistoryProposalSerializer(read_only=True, many=True)
+
+    locals().update(_asset_read_fields())
 
     class Meta:
         model = Proposal
@@ -74,10 +63,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
             'abstain_issuer', 'vote_abstain_result', 'proposal_type', 'onchain_action_type', 'onchain_action_args',
             'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
             'onchain_execution_submitted_at', 'onchain_execution_poll_count',
-            'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
-            'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
-            'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
-            'asset_aquarius_traction', 'asset_issuer_commitments',
+            *ASSET_FIELDS,
         ]
 
 
@@ -85,15 +71,31 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
     text = QuillField()
     discord_username = serializers.CharField(required=True, allow_null=True)
 
+    # Asset payload — accepted as flat input keys to preserve the legacy API contract.
+    # Persisted via `upsert_asset_records` into AssetToken + AssetProposalPayload.
+    # They appear in `validated_data` but are popped before `super().create()` because
+    # Proposal no longer carries asset_* columns.
+    asset_code = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_issuer = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_contract_address = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_issuer_information = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_token_description = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_holder_distribution = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_liquidity = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_trading_volume = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_audit_info = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_stellar_flags = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_related_projects = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_community_references = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_aquarius_traction = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+    asset_issuer_commitments = serializers.CharField(required=False, allow_null=True, allow_blank=True, write_only=True)
+
     class Meta:
         model = Proposal
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at', 'transaction_hash',
             'discord_channel_name', 'discord_username', 'envelope_xdr', 'discord_channel_url',
-            'proposal_type', 'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
-            'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
-            'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
-            'asset_aquarius_traction', 'asset_issuer_commitments',
+            'proposal_type', *ASSET_FIELDS,
             'onchain_action_type', 'onchain_action_args',
             'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
             'onchain_execution_submitted_at', 'onchain_execution_poll_count',
@@ -202,6 +204,9 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         return {'proposal_type': message}
 
     def create(self, validated_data):
+        # Pop asset_* keys before super().create() — Proposal model no longer carries those columns.
+        asset_data = {key: validated_data.pop(key, None) for key in ASSET_FIELDS}
+
         validated_data['draft'] = True
         validated_data['action'] = Proposal.TO_CREATE
         validated_data.setdefault('proposal_type', Proposal.PROPOSAL_TYPE_GENERAL)
@@ -213,7 +218,17 @@ class ProposalCreateSerializer(serializers.ModelSerializer):
         if status not in (Proposal.FINE, Proposal.HORIZON_ERROR):
             validated_data['hide'] = True
         validated_data['payment_status'] = status
-        return super(ProposalCreateSerializer, self).create(validated_data)
+        with transaction.atomic():
+            proposal = super(ProposalCreateSerializer, self).create(validated_data)
+            upsert_asset_records(proposal, asset_data)
+        return proposal
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        asset_data = asset_data_from_proposal(instance)
+        for field_name in ASSET_FIELDS:
+            data[field_name] = asset_data.get(field_name) or None
+        return data
 
 
 class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about joining with create serializer
@@ -263,16 +278,17 @@ class ProposalUpdateSerializer(serializers.ModelSerializer):  # think about join
 class SubmitSerializer(serializers.ModelSerializer):
     text = QuillField(required=False)
 
+    # asset_* fields exposed for backward compatibility (legacy clients reading them
+    # from /submit endpoint response). Read-only via FK chain.
+    locals().update(_asset_read_fields())
+
     class Meta:
         model = Proposal
         fields = [
             'id', 'proposed_by', 'title', 'text', 'start_at', 'end_at',
             'discord_channel_url', 'discord_channel_name', 'discord_username', 'envelope_xdr',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
-            'proposal_type', 'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
-            'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
-            'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
-            'asset_aquarius_traction', 'asset_issuer_commitments',
+            'proposal_type', *ASSET_FIELDS,
             'onchain_action_type', 'onchain_action_args',
             'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
             'onchain_execution_submitted_at', 'onchain_execution_poll_count',
@@ -282,10 +298,7 @@ class SubmitSerializer(serializers.ModelSerializer):
             'id', 'proposed_by', 'title', 'text',
             'discord_channel_url', 'discord_channel_name', 'discord_username',
             'proposal_status', 'payment_status', 'last_updated_at', 'created_at',
-            'proposal_type', 'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
-            'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
-            'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
-            'asset_aquarius_traction', 'asset_issuer_commitments',
+            'proposal_type', *ASSET_FIELDS,
             'onchain_action_type', 'onchain_action_args',
             'onchain_execution_status', 'onchain_execution_tx_hash', 'onchain_execution_started_at',
             'onchain_execution_submitted_at', 'onchain_execution_poll_count',
@@ -370,8 +383,20 @@ class AssetTokenProposalSerializer(serializers.ModelSerializer):
 
 
 class AssetTokenSerializer(serializers.Serializer):
-    asset_code = serializers.CharField(allow_null=True)
-    asset_issuer = serializers.CharField(allow_null=True)
-    asset_contract_address = serializers.CharField(allow_null=True)
-    whitelisted = serializers.BooleanField()
-    proposals = AssetTokenProposalSerializer(many=True)
+    """Legacy flat shape preserved via explicit field declarations on top of `AssetToken` instance.
+
+    Used by `AssetTokenView` which now serves `AssetToken` queryset directly.
+    `asset_code` / `asset_issuer` map onto `classic_code` / `classic_issuer`,
+    `asset_contract_address` onto `contract_address`.
+    Nested `proposals` is materialized from reverse `payloads` (prefetched in view).
+    """
+    asset_code = serializers.CharField(source='classic_code', allow_null=True, read_only=True)
+    asset_issuer = serializers.CharField(source='classic_issuer', allow_null=True, read_only=True)
+    asset_contract_address = serializers.CharField(source='contract_address', allow_null=True, read_only=True)
+    whitelisted = serializers.BooleanField(read_only=True)
+    proposals = serializers.SerializerMethodField()
+
+    def get_proposals(self, token):
+        # `payloads` is prefetched with select_related('proposal') in AssetTokenView.
+        proposals = [payload.proposal for payload in token.payloads.all()]
+        return AssetTokenProposalSerializer(proposals, many=True).data

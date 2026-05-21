@@ -252,7 +252,9 @@ def task_execute_onchain_action_send(proposal_id: int):
     if not claimed:
         return
 
-    proposal = Proposal.objects.get(id=proposal_id)
+    # select_related on the FK chain — `onchain_action_args` property hits
+    # `proposal.asset_payload.asset_token.contract_address`.
+    proposal = Proposal.objects.select_related('asset_payload__asset_token').get(id=proposal_id)
 
     try:
         tx_hash = execute_onchain_action(proposal)
@@ -280,9 +282,45 @@ def task_execute_onchain_action_send(proposal_id: int):
     )
 
 
+class _MissingAssetPayloadError(Exception):
+    """Raised by _sync_asset_token_on_success when an asset proposal has no payload row."""
+
+
+def _sync_asset_token_on_success(proposal):
+    """Sync canonical AssetToken state after a successful onchain execution.
+
+    Called from task_poll_submitted_onchain_executions when SUCCESS is observed.
+    Closes inbox finding-2: whitelisted is updated at execution time, not at end_at.
+
+    Returns silently for non-asset proposals (NONE action type — nothing to sync).
+    Raises _MissingAssetPayloadError if proposal IS asset-type but payload row is missing —
+    the caller treats it as a fail-closed signal and routes the proposal to manual review.
+    """
+    if not Proposal.is_asset_proposal_type(proposal.proposal_type):
+        return
+    payload = getattr(proposal, 'asset_payload', None)
+    if payload is None:
+        raise _MissingAssetPayloadError(
+            'AssetProposalPayload missing for asset proposal {}'.format(proposal.id),
+        )
+    token = payload.asset_token
+    now = timezone.now()
+    if proposal.proposal_type == Proposal.PROPOSAL_TYPE_ADD_ASSET:
+        token.whitelisted = True
+        token.whitelisted_since = now
+    elif proposal.proposal_type == Proposal.PROPOSAL_TYPE_REMOVE_ASSET:
+        token.whitelisted = False
+        token.unwhitelisted_since = now
+    token.last_execution_at = now
+    token.save(update_fields=[
+        'whitelisted', 'whitelisted_since', 'unwhitelisted_since',
+        'last_execution_at', 'updated_at',
+    ])
+
+
 @celery_app.task(ignore_result=True)
 def task_poll_submitted_onchain_executions():
-    proposals = Proposal.objects.filter(
+    proposals = Proposal.objects.select_related('asset_payload__asset_token').filter(
         proposal_status=Proposal.VOTED,
         onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUBMITTED,
     ).exclude(onchain_execution_tx_hash__isnull=True)
@@ -311,9 +349,43 @@ def task_poll_submitted_onchain_executions():
             continue
 
         if result.status == GetTransactionStatus.SUCCESS:
-            Proposal.objects.filter(id=proposal.id).update(
-                onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUCCESS,
-            )
+            try:
+                with transaction.atomic():
+                    Proposal.objects.filter(id=proposal.id).update(
+                        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUCCESS,
+                    )
+                    _sync_asset_token_on_success(proposal)
+            except _MissingAssetPayloadError:
+                logger.error(
+                    'Asset proposal %s reported onchain SUCCESS but has no AssetProposalPayload row; '
+                    'routing to manual review without flipping onchain_execution_status.',
+                    proposal.id,
+                )
+                Proposal.objects.filter(id=proposal.id).update(
+                    onchain_execution_status=Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW,
+                )
+            except Exception:
+                # SUCCESS update rolled back by the surrounding atomic(); proposal stays SUBMITTED.
+                # Reuse the standard poll-count + manual-review escalation so a persistent sync
+                # bug can't make this proposal loop forever every tick.
+                next_poll_count = proposal.onchain_execution_poll_count + 1
+                update_kwargs = {'onchain_execution_poll_count': next_poll_count}
+                if next_poll_count >= settings.ONCHAIN_TX_MAX_POLLS:
+                    update_kwargs['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW
+                    logger.exception(
+                        'AssetToken sync after onchain SUCCESS failed for proposal %s after %s attempts; '
+                        'manual review required.',
+                        proposal.id,
+                        next_poll_count,
+                    )
+                else:
+                    logger.exception(
+                        'AssetToken sync after onchain SUCCESS failed for proposal %s; '
+                        'transaction rolled back, poll_count=%s, will retry on next tick.',
+                        proposal.id,
+                        next_poll_count,
+                    )
+                Proposal.objects.filter(id=proposal.id).update(**update_kwargs)
             continue
 
         if result.status == GetTransactionStatus.FAILED:
@@ -346,7 +418,7 @@ def task_poll_submitted_onchain_executions():
 def task_retry_failed_onchain_executions():
     _mark_stale_in_progress_onchain_executions_for_review()
 
-    proposals = Proposal.objects.filter(
+    proposals = Proposal.objects.select_related('asset_payload__asset_token').filter(
         proposal_status=Proposal.VOTED,
         proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
         onchain_execution_status__in=[

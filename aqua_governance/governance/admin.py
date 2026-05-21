@@ -2,8 +2,10 @@ from django.contrib import admin
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 
+from aqua_governance.governance.asset_proposal_writer import upsert_asset_records
+from aqua_governance.governance.asset_serializer_fields import ASSET_FIELDS
 from aqua_governance.governance.forms import ProposalAdminForm
-from aqua_governance.governance.models import LogVote, Proposal
+from aqua_governance.governance.models import AssetProposalPayload, AssetToken, LogVote, Proposal
 
 
 @admin.register(Proposal)
@@ -28,22 +30,67 @@ class ProposalAdmin(admin.ModelAdmin):
         'new_title', 'new_text', 'new_transaction_hash', 'new_envelope_xdr', 'new_start_at', 'new_end_at',
     ]
     search_fields = ['proposed_by', 'title', 'transaction_hash', 'new_transaction_hash']
-    fields = [
-        'proposed_by', 'title', 'text', 'proposal_type', 'is_simple_proposal', 'hide', 'draft', 'status', 'action',
-        'proposal_status', 'payment_status', 'version', 'created_at', 'last_updated_at',
-        'transaction_hash', 'envelope_xdr', 'start_at', 'end_at',
-        'new_title', 'new_text', 'new_transaction_hash', 'new_envelope_xdr', 'new_start_at', 'new_end_at',
-        'vote_for_issuer', 'vote_against_issuer', 'abstain_issuer',
-        'vote_for_result', 'vote_against_result', 'vote_abstain_result',
-        'aqua_circulating_supply', 'ice_circulating_supply', 'percent_for_quorum',
-        'discord_channel_url', 'discord_channel_name', 'discord_username',
-        'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
-        'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
-        'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
-        'asset_aquarius_traction', 'asset_issuer_commitments',
-        'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
-        'onchain_execution_started_at', 'onchain_execution_submitted_at', 'onchain_execution_poll_count',
-    ]
+    # Use `fieldsets` so the 14 asset_* form fields (declared on
+    # AssetPayloadFormMixin) survive `modelform_factory` filtering. Fieldsets
+    # are NOT validated against the model by `fields_for_model` — they're a pure
+    # layout directive.
+    fieldsets = (
+        (None, {
+            'fields': (
+                'proposed_by', 'title', 'text', 'proposal_type', 'is_simple_proposal',
+                'hide', 'draft', 'status', 'action',
+                'proposal_status', 'payment_status', 'version', 'created_at', 'last_updated_at',
+                'transaction_hash', 'envelope_xdr', 'start_at', 'end_at',
+                'new_title', 'new_text', 'new_transaction_hash', 'new_envelope_xdr', 'new_start_at', 'new_end_at',
+                'vote_for_issuer', 'vote_against_issuer', 'abstain_issuer',
+                'vote_for_result', 'vote_against_result', 'vote_abstain_result',
+                'aqua_circulating_supply', 'ice_circulating_supply', 'percent_for_quorum',
+                'discord_channel_url', 'discord_channel_name', 'discord_username',
+            ),
+        }),
+        ('Asset payload', {
+            'classes': ('asset-proposal-section',),
+            'fields': (
+                'asset_code', 'asset_issuer', 'asset_contract_address',
+                'asset_issuer_information', 'asset_token_description', 'asset_holder_distribution',
+                'asset_liquidity', 'asset_trading_volume', 'asset_audit_info',
+                'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
+                'asset_aquarius_traction', 'asset_issuer_commitments',
+            ),
+        }),
+        ('Onchain execution', {
+            'classes': ('asset-proposal-section',),
+            'fields': (
+                'onchain_action_type', 'onchain_action_args',
+                'onchain_execution_status', 'onchain_execution_tx_hash',
+                'onchain_execution_started_at', 'onchain_execution_submitted_at',
+                'onchain_execution_poll_count',
+            ),
+        }),
+    )
+    asset_fieldset = (
+        'Asset payload', {
+            'classes': ('asset-proposal-section',),
+            'fields': (
+                'asset_code', 'asset_issuer', 'asset_contract_address',
+                'asset_issuer_information', 'asset_token_description', 'asset_holder_distribution',
+                'asset_liquidity', 'asset_trading_volume', 'asset_audit_info',
+                'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
+                'asset_aquarius_traction', 'asset_issuer_commitments',
+            ),
+        },
+    )
+    onchain_fieldset = (
+        'Onchain execution', {
+            'classes': ('asset-proposal-section',),
+            'fields': (
+                'onchain_action_type', 'onchain_action_args',
+                'onchain_execution_status', 'onchain_execution_tx_hash',
+                'onchain_execution_started_at', 'onchain_execution_submitted_at',
+                'onchain_execution_poll_count',
+            ),
+        },
+    )
     list_filter = ('proposal_type', 'proposal_status', 'payment_status', 'draft', 'hide', 'action', 'start_at', 'end_at')
     form = ProposalAdminForm
 
@@ -51,6 +98,7 @@ class ProposalAdmin(admin.ModelAdmin):
         css = {
             'all': ('admin/django_quill.css',),
         }
+        js = ('admin/proposal_asset_sections.js',)
 
     def changeform_view(self, request, object_id=None, form_url='', extra_context=None):
         if request.method == 'POST':
@@ -58,7 +106,31 @@ class ProposalAdmin(admin.ModelAdmin):
                 return super().changeform_view(request, object_id, form_url, extra_context)
         return super().changeform_view(request, object_id, form_url, extra_context)
 
+    def get_fieldsets(self, request, obj=None):
+        fieldsets = list(super().get_fieldsets(request, obj))
+        fieldsets = [
+            fieldset
+            for fieldset in fieldsets
+            if fieldset[0] not in (self.asset_fieldset[0], 'Onchain execution')
+        ]
+        if obj is None or self._is_asset_object(obj):
+            fieldsets.insert(1, self.asset_fieldset)
+            fieldsets.append(self.onchain_fieldset)
+        return fieldsets
+
     def get_form(self, request, obj=None, change=False, **kwargs):
+        # `modelform_factory` filters out declared form fields (like the 14
+        # asset_* on AssetPayloadFormMixin) when `fields=...` is restricted to
+        # model fields only. Augment the fields list with asset_* names so the
+        # mixin's declared fields survive the factory.
+        existing_fields = kwargs.get('fields')
+        if existing_fields and existing_fields != '__all__':
+            fields_with_asset = list(existing_fields)
+            for name in ASSET_FIELDS:
+                if name not in fields_with_asset:
+                    fields_with_asset.append(name)
+            kwargs['fields'] = fields_with_asset
+
         form_class = super().get_form(request, obj, change=change, **kwargs)
 
         class RequestBoundProposalAdminForm(form_class):
@@ -101,7 +173,6 @@ class ProposalAdmin(admin.ModelAdmin):
                 'proposed_by',
                 'proposal_type',
                 'transaction_hash', 'envelope_xdr',
-                'asset_code', 'asset_issuer', 'asset_contract_address',
             ]
         if not request.user.is_superuser:
             readonly_fields.append('hide')
@@ -141,6 +212,9 @@ class ProposalAdmin(admin.ModelAdmin):
         if not request.user.is_superuser and not obj.is_asset_proposal:
             raise PermissionDenied('Managers can manage only asset proposals.')
         super().save_model(request, obj, form, change)
+        asset_data = (form.cleaned_data or {}).get('_asset_data') or {}
+        if asset_data:
+            upsert_asset_records(obj, asset_data)
 
     def _list_display_quorum(self, obj):
         if obj.vote_for_result + obj.vote_against_result + obj.vote_abstain_result >= (
@@ -205,3 +279,104 @@ class LogVoteAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+
+class AssetProposalPayloadInline(admin.StackedInline):
+    model = AssetProposalPayload
+    can_delete = False
+    extra = 0
+    max_num = 1
+    readonly_fields = (
+        'asset_token',
+        'issuer_information', 'token_description', 'holder_distribution',
+        'liquidity', 'trading_volume', 'audit_info', 'stellar_flags',
+        'related_projects', 'community_references', 'aquarius_traction',
+        'issuer_commitments', 'created_at',
+    )
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+ProposalAdmin.inlines = [AssetProposalPayloadInline]
+
+
+def _recompute_whitelisted_from_history(token):
+    """Walk the token's VOTED+SUCCESS proposal history and reset whitelisted state.
+
+    Pure-Python recomputation — does NOT touch the onchain contract. Useful as a
+    safety net when `_sync_asset_token_on_success` was missed for some reason and
+    the AssetToken row drifted from the history's implied state.
+    """
+    from django.utils import timezone
+
+    payloads = token.payloads.select_related('proposal').filter(
+        proposal__proposal_status=Proposal.VOTED,
+        proposal__onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUCCESS,
+    ).order_by('proposal__end_at', 'proposal__id')
+
+    new_whitelisted = False
+    new_whitelisted_since = None
+    new_unwhitelisted_since = None
+    new_last_execution_at = None
+    for payload in payloads:
+        p = payload.proposal
+        ts = p.end_at
+        if p.proposal_type == Proposal.PROPOSAL_TYPE_ADD_ASSET:
+            new_whitelisted = True
+            new_whitelisted_since = ts
+        elif p.proposal_type == Proposal.PROPOSAL_TYPE_REMOVE_ASSET:
+            new_whitelisted = False
+            new_unwhitelisted_since = ts
+        new_last_execution_at = ts
+
+    token.whitelisted = new_whitelisted
+    token.whitelisted_since = new_whitelisted_since
+    token.unwhitelisted_since = new_unwhitelisted_since
+    token.last_execution_at = new_last_execution_at
+    token.save(update_fields=[
+        'whitelisted', 'whitelisted_since', 'unwhitelisted_since',
+        'last_execution_at', 'updated_at',
+    ])
+
+
+@admin.register(AssetToken)
+class AssetTokenAdmin(admin.ModelAdmin):
+    list_display = (
+        'contract_address', 'classic_code', 'classic_issuer', 'whitelisted',
+        'whitelisted_since', 'unwhitelisted_since', 'last_execution_at',
+    )
+    search_fields = ('contract_address', 'classic_code', 'classic_issuer')
+    list_filter = ('whitelisted',)
+    readonly_fields = (
+        'contract_address', 'classic_code', 'classic_issuer', 'whitelisted',
+        'whitelisted_since', 'unwhitelisted_since', 'last_execution_at',
+        'created_at', 'updated_at',
+    )
+    actions = ['recompute_whitelisted_from_history']
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def recompute_whitelisted_from_history(self, request, queryset):
+        """Safety-net action: recompute `whitelisted` from VOTED+SUCCESS history.
+
+        Does NOT touch onchain contract — purely local DB recalc. Use when manual
+        verification suggests AssetToken drifted from the history. Onchain
+        reconciliation is a separate feature (not in this PR).
+        """
+        updated = 0
+        for token in queryset:
+            _recompute_whitelisted_from_history(token)
+            updated += 1
+        self.message_user(
+            request,
+            f'Recomputed whitelisted from history for {updated} token(s). '
+            f'Note: onchain contract state was NOT touched.',
+        )
+    recompute_whitelisted_from_history.short_description = (
+        'Recompute whitelisted from VOTED+SUCCESS proposal history (local only)'
+    )

@@ -169,6 +169,13 @@ if CELERY_ENABLED:
     CELERY_TASK_SERIALIZER = 'json'
     CELERY_TASK_IGNORE_RESULT = True
 
+    # Bound task duration so `systemctl stop celeryd` during a deploy maintenance
+    # window cannot wait indefinitely on a stuck onchain polling task. The soft
+    # limit raises SoftTimeLimitExceeded inside the task (worker can clean up),
+    # the hard limit terminates the worker child after the grace period.
+    CELERY_TASK_SOFT_TIME_LIMIT = env.int('CELERY_TASK_SOFT_TIME_LIMIT', default=60)
+    CELERY_TASK_TIME_LIMIT = env.int('CELERY_TASK_TIME_LIMIT', default=90)
+
 
 # Rest framework configuration
 # http://www.django-rest-framework.org/api-guide/settings/

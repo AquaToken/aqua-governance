@@ -72,11 +72,12 @@ class Proposal(models.Model):
         PROPOSAL_TYPE_ADD_ASSET,
         PROPOSAL_TYPE_REMOVE_ASSET,
     )
+    # After Stage 2 single-shot, asset identifier is owned by `AssetToken` via
+    # `asset_payload.asset_token` (FK is immutable by writer guard, not by model
+    # field tracker). EXECUTION_SOURCE_FIELDS keeps only model-local fields whose
+    # change after creation must be rejected by the immutability check below.
     EXECUTION_SOURCE_FIELDS = (
         'proposal_type',
-        'asset_code',
-        'asset_issuer',
-        'asset_contract_address',
     )
 
     ONCHAIN_ACTION_NONE = 'NONE'
@@ -159,21 +160,8 @@ class Proposal(models.Model):
     )
     action = models.CharField(choices=PROPOSAL_ACTION_CHOICES, max_length=64, default=NONE)
 
-    # Asset proposal payload (section 5). Mandatory only for proposal_type=ASSET.
-    asset_code = models.CharField(max_length=64, null=True, blank=True)
-    asset_issuer = models.CharField(max_length=56, null=True, blank=True)
-    asset_contract_address = models.CharField(max_length=128, null=True, blank=True)
-    asset_issuer_information = models.TextField(null=True, blank=True)
-    asset_token_description = models.TextField(null=True, blank=True)
-    asset_holder_distribution = models.TextField(null=True, blank=True)
-    asset_liquidity = models.TextField(null=True, blank=True)
-    asset_trading_volume = models.TextField(null=True, blank=True)
-    asset_audit_info = models.TextField(null=True, blank=True)
-    asset_stellar_flags = models.TextField(null=True, blank=True)
-    asset_related_projects = models.TextField(null=True, blank=True)
-    asset_community_references = models.TextField(null=True, blank=True)
-    asset_aquarius_traction = models.TextField(null=True, blank=True)
-    asset_issuer_commitments = models.TextField(null=True, blank=True)
+    # Asset proposal payload moved to `AssetToken` + `AssetProposalPayload`
+    # (Stage 2 single-shot, migration 0028). Access via `proposal.asset_payload`.
     onchain_execution_status = models.CharField(
         choices=ONCHAIN_EXECUTION_STATUS_CHOICES,
         max_length=32,
@@ -272,13 +260,23 @@ class Proposal(models.Model):
 
     @property
     def onchain_action_args(self) -> list[str]:
+        """Canonical args for the onchain hook.
+
+        Reads asset identifier from `self.asset_payload.asset_token` (FK chain).
+        Callers should ensure `.select_related('asset_payload__asset_token')` to
+        avoid N+1 (see ProposalViewSet, AssetTokenView, tasks.py).
+        """
         if not self.is_asset_proposal:
             return []
 
+        payload = getattr(self, 'asset_payload', None)
+        if payload is None:
+            return []
+        token = payload.asset_token
         return derive_proposal_onchain_action_args(
-            asset_code=self.asset_code,
-            asset_issuer=self.asset_issuer,
-            asset_contract_address=self.asset_contract_address,
+            asset_code=token.classic_code,
+            asset_issuer=token.classic_issuer,
+            asset_contract_address=token.contract_address,
         )
 
     def check_transaction(self):
@@ -458,3 +456,57 @@ class HistoryProposal(models.Model):
 
     def __str__(self):
         return 'History proposal ' + str(self.id)
+
+
+class AssetToken(models.Model):
+    contract_address = models.CharField(max_length=128, primary_key=True)
+    classic_code = models.CharField(max_length=64, null=True, blank=True)
+    classic_issuer = models.CharField(max_length=56, null=True, blank=True)
+
+    whitelisted = models.BooleanField(default=False)
+    whitelisted_since = models.DateTimeField(null=True, blank=True)
+    unwhitelisted_since = models.DateTimeField(null=True, blank=True)
+    last_execution_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['whitelisted']),
+            models.Index(fields=['classic_code', 'classic_issuer']),
+        ]
+
+    def __str__(self):
+        return self.contract_address
+
+
+class AssetProposalPayload(models.Model):
+    proposal = models.OneToOneField(
+        Proposal,
+        on_delete=models.CASCADE,
+        related_name='asset_payload',
+        primary_key=True,
+    )
+    asset_token = models.ForeignKey(
+        AssetToken,
+        on_delete=models.PROTECT,
+        related_name='payloads',
+    )
+
+    issuer_information = models.TextField(blank=True, default='')
+    token_description = models.TextField(blank=True, default='')
+    holder_distribution = models.TextField(blank=True, default='')
+    liquidity = models.TextField(blank=True, default='')
+    trading_volume = models.TextField(blank=True, default='')
+    audit_info = models.TextField(blank=True, default='')
+    stellar_flags = models.TextField(blank=True, default='')
+    related_projects = models.TextField(blank=True, default='')
+    community_references = models.TextField(blank=True, default='')
+    aquarius_traction = models.TextField(blank=True, default='')
+    issuer_commitments = models.TextField(blank=True, default='')
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return 'AssetProposalPayload(proposal_id={})'.format(self.proposal_id)

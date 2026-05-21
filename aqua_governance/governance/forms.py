@@ -5,10 +5,15 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
+from aqua_governance.governance.asset_proposal_writer import asset_data_from_proposal
+from aqua_governance.governance.asset_serializer_fields import (
+    ASSET_FIELDS,
+    ASSET_IDENTIFIER_FIELDS,
+    ASSET_REQUIRED_TEXT_FIELDS,
+)
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from aqua_governance.governance.models import Proposal
 from aqua_governance.governance.asset_payload import validate_asset_payload
-from aqua_governance.governance.serializers_v2 import ASSET_FIELDS, ASSET_REQUIRED_TEXT_FIELDS
 from aqua_governance.utils.payments import check_transaction_xdr
 from aqua_governance.utils.widgets import CustomQuillWidget
 
@@ -25,7 +30,61 @@ def _value_is_blank(value) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-class ProposalAdminForm(forms.ModelForm):
+class AssetPayloadFormMixin(forms.Form):
+    """Declare 14 asset_* form fields detached from Proposal model.
+
+    After Stage 2 single-shot, Proposal no longer carries asset_* columns. This mixin
+    re-exposes the same fields on the admin form so the UX is unchanged: admin sees
+    flat asset_code / asset_issuer / asset_contract_address + 11 narrative textareas,
+    fills them, and on save we route through `upsert_asset_records(proposal, asset_data)`.
+
+    The mixin:
+      - Adds 14 declared form fields (3 identifier CharField + 11 narrative CharField/Textarea).
+      - Populates `self.initial[asset_<key>]` from `instance.asset_payload` for existing proposals.
+      - Builds `cleaned_data['_asset_data']` dict that the model save path picks up.
+    """
+
+    asset_code = forms.CharField(max_length=64, required=False)
+    asset_issuer = forms.CharField(max_length=56, required=False)
+    asset_contract_address = forms.CharField(max_length=128, required=False)
+    asset_issuer_information = forms.CharField(required=False, widget=forms.Textarea(attrs={'rows': 3}))
+    asset_token_description = forms.CharField(required=False, widget=forms.Textarea(attrs={'rows': 3}))
+    asset_holder_distribution = forms.CharField(required=False, widget=forms.Textarea(attrs={'rows': 3}))
+    asset_liquidity = forms.CharField(required=False, widget=forms.Textarea(attrs={'rows': 3}))
+    asset_trading_volume = forms.CharField(required=False, widget=forms.Textarea(attrs={'rows': 3}))
+    asset_audit_info = forms.CharField(required=False, widget=forms.Textarea(attrs={'rows': 3}))
+    asset_stellar_flags = forms.CharField(required=False, widget=forms.Textarea(attrs={'rows': 3}))
+    asset_related_projects = forms.CharField(required=False, widget=forms.Textarea(attrs={'rows': 3}))
+    asset_community_references = forms.CharField(required=False, widget=forms.Textarea(attrs={'rows': 3}))
+    asset_aquarius_traction = forms.CharField(required=False, widget=forms.Textarea(attrs={'rows': 3}))
+    asset_issuer_commitments = forms.CharField(required=False, widget=forms.Textarea(attrs={'rows': 3}))
+
+    def _populate_initial_asset_fields(self):
+        instance = getattr(self, 'instance', None)
+        if instance is None or not instance.pk:
+            return
+        existing = asset_data_from_proposal(instance)
+        for field_name in ASSET_FIELDS:
+            if field_name in self.fields and not self.initial.get(field_name):
+                self.initial[field_name] = existing.get(field_name, '')
+
+    def _collect_asset_data(self, cleaned_data):
+        """Build asset_data dict from cleaned form input.
+
+        Falls back to `instance.asset_payload` for fields not present in cleaned_data
+        (e.g. when admin edits only a subset on an existing asset proposal).
+        """
+        existing = asset_data_from_proposal(self.instance) if self.instance and self.instance.pk else {}
+        asset_data = {}
+        for field_name in ASSET_FIELDS:
+            if field_name in cleaned_data:
+                asset_data[field_name] = cleaned_data.get(field_name) or ''
+            else:
+                asset_data[field_name] = existing.get(field_name, '')
+        return asset_data
+
+
+class ProposalAdminForm(AssetPayloadFormMixin, forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['text'].widget = CustomQuillWidget()
@@ -40,10 +99,6 @@ class ProposalAdminForm(forms.ModelForm):
             if field_name in self.fields:
                 self.fields[field_name].widget = forms.Textarea(attrs={'rows': 6})
 
-        for field_name in ASSET_REQUIRED_TEXT_FIELDS:
-            if field_name in self.fields:
-                self.fields[field_name].widget = forms.Textarea(attrs={'rows': 3})
-
         for field_name in ('transaction_hash', 'envelope_xdr'):
             if field_name in self.fields:
                 self.fields[field_name].required = False
@@ -54,13 +109,20 @@ class ProposalAdminForm(forms.ModelForm):
             if field_name in self.fields:
                 self.fields[field_name].required = False
 
+        self._populate_initial_asset_fields()
+        self._disable_existing_asset_identifier_fields()
+
         if self.instance._state.adding:
             self._prefill_asset_queue_window()
 
+    def _disable_existing_asset_identifier_fields(self):
+        if not self.instance or not self.instance.pk:
+            return
+        for field_name in ASSET_IDENTIFIER_FIELDS:
+            if field_name in self.fields:
+                self.fields[field_name].disabled = True
+
     def _prefill_asset_queue_window(self):
-        # Prefill with the next free queue slot. Safe for any proposal_type because
-        # ProposalAdminForm.clean() forces start_at/end_at back to None for GENERAL
-        # proposals on creation, so prefilled values cannot bypass the submit-payment gate.
         if 'start_at' not in self.fields or 'end_at' not in self.fields:
             return
         if self.initial.get('start_at') or self.initial.get('end_at'):
@@ -88,6 +150,8 @@ class ProposalAdminForm(forms.ModelForm):
 
     class Meta:
         model = Proposal
+        # `forms.ALL_FIELDS` pulls model fields only; asset_* are declared on the
+        # mixin and therefore already part of the form. Keeps Meta minimal.
         fields = forms.ALL_FIELDS
 
     def _is_asset_manager(self) -> bool:
@@ -113,6 +177,9 @@ class ProposalAdminForm(forms.ModelForm):
             self._validate_asset_payload(cleaned_data)
         else:
             raise ValidationError({'proposal_type': 'Unsupported proposal_type value.'})
+
+        # Expose asset_data dict to the admin save path (ProposalAdmin.save_model).
+        cleaned_data['_asset_data'] = self._collect_asset_data(cleaned_data) if is_asset_proposal else {}
 
         interval_lock_acquired = False
         if 'proposal_status' in cleaned_data:
@@ -169,9 +236,6 @@ class ProposalAdminForm(forms.ModelForm):
                 self._validate_general_payment_fields(cleaned_data)
                 self.instance.draft = True
                 self.instance.action = Proposal.TO_CREATE
-                # General proposals must go through the submit flow to set start_at/end_at;
-                # otherwise the time-based sync task would promote them to VOTING without
-                # a paid submit step.
                 cleaned_data['start_at'] = None
                 cleaned_data['end_at'] = None
                 self.instance.start_at = None
@@ -207,7 +271,7 @@ class ProposalAdminForm(forms.ModelForm):
         for field_name in ASSET_REQUIRED_TEXT_FIELDS:
             if field_name in ADMIN_OPTIONAL_FIELDS:
                 continue
-            if _value_is_blank(cleaned_data.get(field_name)):
+            if _value_is_blank(self._cleaned_or_instance_value(cleaned_data, field_name)):
                 errors[field_name] = 'This field is required for asset proposal.'
         if errors:
             raise ValidationError(errors)
@@ -223,9 +287,14 @@ class ProposalAdminForm(forms.ModelForm):
             raise ValidationError(self._map_asset_validation_error(str(exc))) from exc
 
     def _cleaned_or_instance_value(self, cleaned_data, field_name):
-        if field_name in cleaned_data:
+        """Get current value: cleaned form data first, then existing asset_payload."""
+        if field_name in cleaned_data and not _value_is_blank(cleaned_data.get(field_name)):
             return cleaned_data.get(field_name)
-        return getattr(self.instance, field_name)
+        # Fall back to existing payload for partial edits.
+        if self.instance and self.instance.pk:
+            existing = asset_data_from_proposal(self.instance)
+            return existing.get(field_name) or None
+        return None
 
     @staticmethod
     def _map_asset_validation_error(message: str):

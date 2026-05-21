@@ -52,8 +52,18 @@ class ProposalListSerializer(serializers.ModelSerializer):
         ]
 
 
+from aqua_governance.governance.asset_serializer_fields import (
+    ASSET_FIELDS as _SHARED_ASSET_FIELDS,
+    asset_read_fields as _shared_asset_read_fields,
+)
+
+
 class ProposalDetailSerializer(serializers.ModelSerializer):
     text = QuillField()
+
+    # Asset payload fields (Stage 2 single-shot) — source from FK chain into
+    # AssetProposalPayload + AssetToken to preserve legacy v1 wire-format.
+    locals().update(_shared_asset_read_fields())
 
     class Meta:
         model = Proposal
@@ -65,10 +75,7 @@ class ProposalDetailSerializer(serializers.ModelSerializer):
             'proposal_type',
             'onchain_action_type', 'onchain_action_args', 'onchain_execution_status', 'onchain_execution_tx_hash',
             'onchain_execution_started_at', 'onchain_execution_submitted_at', 'onchain_execution_poll_count',
-            'asset_code', 'asset_issuer', 'asset_contract_address', 'asset_issuer_information',
-            'asset_token_description', 'asset_holder_distribution', 'asset_liquidity', 'asset_trading_volume',
-            'asset_audit_info', 'asset_stellar_flags', 'asset_related_projects', 'asset_community_references',
-            'asset_aquarius_traction', 'asset_issuer_commitments',
+            *_SHARED_ASSET_FIELDS,
         ]
 
 

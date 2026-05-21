@@ -25,7 +25,13 @@ from aqua_governance.governance.filters import (
     build_logvote_prefetch,
     is_active_vote_query,
 )
-from aqua_governance.governance.models import LogVote, Proposal, HistoryProposal
+from aqua_governance.governance.models import (
+    AssetProposalPayload,
+    AssetToken,
+    HistoryProposal,
+    LogVote,
+    Proposal,
+)
 from aqua_governance.governance.pagination import CustomPageNumberPagination
 from aqua_governance.governance.serializers import (
     LogVoteSerializer,
@@ -34,47 +40,27 @@ from aqua_governance.governance.serializers import (
     ProposalListSerializer,
 )
 from aqua_governance.governance import serializers_v2
-from aqua_governance.governance.asset_tokens import canonical_asset_key, compute_token_whitelisted
 
 
 class AssetTokenView(ListModelMixin, GenericViewSet):
     permission_classes = (AllowAny,)
     pagination_class = CustomPageNumberPagination
+    serializer_class = serializers_v2.AssetTokenSerializer
 
     def get_queryset(self):
-        return Proposal.objects.filter(
-            hide=False,
-            draft=False,
-            proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
-        ).order_by('-end_at', '-created_at')
-
-    def list(self, request, *args, **kwargs):
-        proposals = self.get_queryset()
-
-        token_map = {}
-        for proposal in proposals:
-            key = canonical_asset_key(proposal)
-            if key not in token_map:
-                token_map[key] = {
-                    'asset_code': proposal.asset_code,
-                    'asset_issuer': proposal.asset_issuer,
-                    'asset_contract_address': key,
-                    'proposals': [],
-                }
-            token_map[key]['proposals'].append(proposal)
-
-        token_list = []
-        for token_data in token_map.values():
-            token_data['whitelisted'] = compute_token_whitelisted(token_data['proposals'])
-            token_list.append(token_data)
-
-        page = self.paginate_queryset(token_list)
-        if page is not None:
-            serializer = serializers_v2.AssetTokenSerializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
-
-        serializer = serializers_v2.AssetTokenSerializer(token_list, many=True)
-        return Response(serializer.data)
+        visible_payloads = AssetProposalPayload.objects.select_related('proposal').filter(
+            proposal__hide=False,
+            proposal__draft=False,
+        ).order_by('-proposal__end_at', '-proposal__created_at')
+        return AssetToken.objects.filter(
+            payloads__proposal__hide=False,
+            payloads__proposal__draft=False,
+        ).distinct().prefetch_related(
+            Prefetch(
+                'payloads',
+                queryset=visible_payloads,
+            ),
+        ).order_by('-last_execution_at', '-created_at')
 
 
 class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, GenericViewSet):
@@ -100,7 +86,7 @@ class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, Generi
         return super().get_serializer_class()
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = super().get_queryset().select_related('asset_payload__asset_token')
         active_only = is_active_vote_query(self.request)
         if self.action == 'list' and active_only:
             queryset = queryset.filter(logvote__hide=False, logvote__claimed=False).distinct()
@@ -142,7 +128,9 @@ class ProposalViewSet(
     ordering = ['created_at']
 
     def get_queryset(self):
-        queryset = super(ProposalViewSet, self).get_queryset().prefetch_related(
+        queryset = super(ProposalViewSet, self).get_queryset().select_related(
+            'asset_payload__asset_token',
+        ).prefetch_related(
             Prefetch('history_proposal', HistoryProposal.objects.filter(hide=False))
         )
         if self.action != 'retrieve' and self.action != 'list':
