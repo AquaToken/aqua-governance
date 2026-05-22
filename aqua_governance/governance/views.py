@@ -147,10 +147,11 @@ class ProposalViewSet(
         if self.action == 'check_proposal_payment':
             return queryset.exclude(action=Proposal.NONE)
         queryset = queryset.filter(draft=False)
-        if self.action == 'list' and is_active_vote_query(self.request):
+        has_vote_owner_filter = bool(self.request.query_params.get('vote_owner_public_key'))
+        if self.action == 'list' and is_active_vote_query(self.request) and not has_vote_owner_filter:
             queryset = queryset.filter(logvote__hide=False, logvote__claimed=False).distinct()
 
-        if self.request.query_params.get('vote_owner_public_key'):
+        if has_vote_owner_filter:
             return queryset
 
         return queryset

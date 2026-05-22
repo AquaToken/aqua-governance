@@ -25,9 +25,13 @@ def build_logvote_prefetch(request, public_key: Optional[str] = None) -> Prefetc
 
 
 def apply_vote_owner_queryset_filters(queryset, request, public_key: str):
-    queryset = queryset.filter(logvote__account_issuer=public_key, logvote__hide=False)
+    filter_kwargs = {
+        'logvote__account_issuer': public_key,
+        'logvote__hide': False,
+    }
     if is_active_vote_query(request):
-        queryset = queryset.filter(logvote__claimed=False)
+        filter_kwargs['logvote__claimed'] = False
+    queryset = queryset.filter(**filter_kwargs)
     return queryset.distinct()
 
 
