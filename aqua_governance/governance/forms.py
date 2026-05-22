@@ -201,7 +201,30 @@ class ProposalAdminForm(AssetPayloadFormMixin, forms.ModelForm):
             start_at = None
             end_at = None
 
-        if target_status in (Proposal.DISCUSSION, Proposal.VOTING):
+        # X5 (audit finding): detect time-window mutations regardless of target
+        # status. The legacy gate fired only for DISCUSSION/VOTING, so an asset
+        # manager editing `end_at` on a VOTED asset proposal could save a window
+        # overlapping an active VOTING proposal — global "one voting at a time"
+        # invariant silently broken.
+        if self.instance._state.adding:
+            times_changed = is_asset_proposal and (start_at is not None or end_at is not None)
+        else:
+            times_changed = (
+                ('start_at' in cleaned_data and cleaned_data['start_at'] != self.instance.start_at)
+                or ('end_at' in cleaned_data and cleaned_data['end_at'] != self.instance.end_at)
+            )
+
+        # Lock + overlap check fires when:
+        #   - target status puts the row into an active queue
+        #     (DISCUSSION / VOTING) — original behaviour.
+        #   - start_at / end_at are being mutated regardless of status —
+        #     X5 addition.
+        needs_overlap_check = (
+            target_status in (Proposal.DISCUSSION, Proposal.VOTING)
+            or times_changed
+        )
+
+        if needs_overlap_check:
             acquire_proposal_transition_lock()
             interval_lock_acquired = True
             if target_status == Proposal.VOTING and (not start_at or not end_at):
@@ -210,7 +233,15 @@ class ProposalAdminForm(AssetPayloadFormMixin, forms.ModelForm):
                     'end_at': 'end_at is required for an active proposal.',
                 })
             if start_at and end_at:
-                if end_at <= timezone.now():
+                # Future-end_at check stays gated on active target statuses —
+                # admin MAY legitimately move end_at into the past on a VOTED
+                # proposal as a manual "expire" override. Only block past
+                # timestamps when the row is transitioning into or staying in
+                # DISCUSSION / VOTING.
+                if (
+                    end_at <= timezone.now()
+                    and target_status in (Proposal.DISCUSSION, Proposal.VOTING)
+                ):
                     raise ValidationError({'end_at': 'end_at must be in the future.'})
                 current_proposal_id = None if self.instance._state.adding else self.instance.id
                 if Proposal.has_voting_interval_conflict(
