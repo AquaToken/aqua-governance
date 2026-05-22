@@ -261,16 +261,37 @@ def task_execute_onchain_action_send(proposal_id: int):
         if not tx_hash:
             raise ValueError('Onchain hook returned empty transaction hash')
     except Exception:
+        # X4 stopgap (audit finding 2026-05-21-stage-2-single-shot-findings X4):
+        # the failure point may have crossed the RPC broadcast boundary — i.e. the
+        # transaction may already be on chain even though our Python frame did not
+        # reach the `return tx_hash` line. Clearing `onchain_execution_tx_hash` and
+        # setting `FAILED` (the legacy behaviour) made the retry path eligible
+        # (`task_retry_failed_onchain_executions` re-enqueues FAILED), enabling
+        # silent double-submission.
+        #
+        # Safer default until the proper durable-idempotency design lands
+        # (Stage 3 with OnchainExecution per-attempt table, pre-broadcast vs
+        # post-broadcast classification, persistent submission log written
+        # BEFORE the RPC call): route to REQUIRES_REVIEW and PRESERVE whatever
+        # `onchain_execution_tx_hash` the hook may have written before raising.
+        # Operator inspects the row in admin, consults block explorer, then
+        # either (a) manually promotes to SUCCESS + clears tx_hash via shell or
+        # (b) clears tx_hash and sets status back to PENDING to retry. This
+        # trades automation for safety on transient errors that crossed the
+        # broadcast boundary.
         logger.exception(
-            'Onchain send failed for proposal %s (action=%s).',
+            'Onchain send failed for proposal %s (action=%s); routing to REQUIRES_REVIEW '
+            'and preserving any tx_hash the hook may have written before the failure. '
+            'See audit finding X4.',
             proposal.id,
             proposal.onchain_action_type,
         )
+        # Re-read tx_hash + submitted_at AFTER the failure — the hook may have
+        # written them via a side-effect (e.g. inside a stellar-sdk submit
+        # callback that persisted to DB before the timeout fired).
+        # Intentionally NOT in `update_fields`: tx_hash, submitted_at, started_at.
         Proposal.objects.filter(id=proposal_id).update(
-            onchain_execution_status=Proposal.ONCHAIN_EXECUTION_FAILED,
-            onchain_execution_tx_hash=None,
-            onchain_execution_submitted_at=None,
-            onchain_execution_poll_count=0,
+            onchain_execution_status=Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW,
         )
         return
 
