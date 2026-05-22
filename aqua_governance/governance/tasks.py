@@ -10,7 +10,7 @@ from stellar_sdk import Server
 from stellar_sdk.soroban_rpc import GetTransactionStatus
 
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
-from aqua_governance.governance.models import Proposal
+from aqua_governance.governance.models import AssetToken, Proposal
 from aqua_governance.governance.onchain_hooks import execute_onchain_action
 from aqua_governance.governance.onchain_hooks.soroban import get_soroban_transaction
 from aqua_governance.governance.task_logic.proposal_finalization import (
@@ -286,16 +286,32 @@ class _MissingAssetPayloadError(Exception):
     """Raised by _sync_asset_token_on_success when an asset proposal has no payload row."""
 
 
-def _sync_asset_token_on_success(proposal):
+def _sync_asset_token_on_success(proposal_id: int):
     """Sync canonical AssetToken state after a successful onchain execution.
 
-    Called from task_poll_submitted_onchain_executions when SUCCESS is observed.
-    Closes inbox finding-2: whitelisted is updated at execution time, not at end_at.
+    MUST be called inside an existing `transaction.atomic()` block; both
+    Proposal and AssetToken rows are re-fetched under `select_for_update()` so
+    concurrent poll workers and the `AssetTokenAdmin.recompute_whitelisted_from_history`
+    admin action serialize on the AssetToken row. Closes audit finding X2.
+
+    Takes `proposal_id: int` (not a `Proposal` instance) by design — forbids
+    callers from passing a Python-side stale cache. The fresh row is re-read
+    inside this function via `select_for_update`.
 
     Returns silently for non-asset proposals (NONE action type — nothing to sync).
-    Raises _MissingAssetPayloadError if proposal IS asset-type but payload row is missing —
-    the caller treats it as a fail-closed signal and routes the proposal to manual review.
+    Raises `_MissingAssetPayloadError` if proposal IS asset-type but payload row
+    is missing — caller treats it as fail-closed and routes proposal to manual review.
     """
+    # Re-fetch under row lock on Proposal: guarantees serialization with any
+    # other writer touching the same Proposal row (concurrent worker, admin
+    # save, etc.). `of=('self',)` constrains FOR UPDATE to the Proposal table
+    # only — Postgres rejects FOR UPDATE on the nullable side of a LEFT OUTER
+    # JOIN (which is how Django emits the reverse OneToOne to asset_payload).
+    # AssetToken is locked separately below.
+    proposal = Proposal.objects.select_for_update(of=('self',)).select_related(
+        'asset_payload__asset_token',
+    ).get(id=proposal_id)
+
     if not Proposal.is_asset_proposal_type(proposal.proposal_type):
         return
     payload = getattr(proposal, 'asset_payload', None)
@@ -303,7 +319,9 @@ def _sync_asset_token_on_success(proposal):
         raise _MissingAssetPayloadError(
             'AssetProposalPayload missing for asset proposal {}'.format(proposal.id),
         )
-    token = payload.asset_token
+    # Lock AssetToken row separately — protects against concurrent
+    # `AssetTokenAdmin.recompute_whitelisted_from_history` clobbering our write.
+    token = AssetToken.objects.select_for_update().get(pk=payload.asset_token_id)
     now = timezone.now()
     if proposal.proposal_type == Proposal.PROPOSAL_TYPE_ADD_ASSET:
         token.whitelisted = True
@@ -351,10 +369,26 @@ def task_poll_submitted_onchain_executions():
         if result.status == GetTransactionStatus.SUCCESS:
             try:
                 with transaction.atomic():
-                    Proposal.objects.filter(id=proposal.id).update(
+                    # Status-conditional update: only flip SUBMITTED → SUCCESS.
+                    # Returns 0 rows if another worker / admin has already moved
+                    # this proposal out of SUBMITTED (e.g. into REQUIRES_REVIEW
+                    # by retry-task escalation, or another concurrent poll). In
+                    # that case we skip the sync — the canonical state has been
+                    # set by whoever won the race. Closes audit finding X2.
+                    updated = Proposal.objects.filter(
+                        id=proposal.id,
+                        onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUBMITTED,
+                    ).update(
                         onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUCCESS,
                     )
-                    _sync_asset_token_on_success(proposal)
+                    if updated == 0:
+                        logger.info(
+                            'Proposal %s no longer SUBMITTED at SUCCESS sync time; '
+                            'another worker or admin already transitioned it. Skipping.',
+                            proposal.id,
+                        )
+                    else:
+                        _sync_asset_token_on_success(proposal.id)
             except _MissingAssetPayloadError:
                 logger.error(
                     'Asset proposal %s reported onchain SUCCESS but has no AssetProposalPayload row; '

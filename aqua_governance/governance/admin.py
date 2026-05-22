@@ -307,37 +307,45 @@ def _recompute_whitelisted_from_history(token):
     Pure-Python recomputation — does NOT touch the onchain contract. Useful as a
     safety net when `_sync_asset_token_on_success` was missed for some reason and
     the AssetToken row drifted from the history's implied state.
+
+    Wrapped in `transaction.atomic()` and re-fetches the token under
+    `select_for_update()` so concurrent poll-task SUCCESS sync cannot clobber the
+    recomputed state mid-way through. Closes audit finding X2 (admin-vs-poll race).
     """
-    from django.utils import timezone
+    with transaction.atomic():
+        # Re-fetch under row lock — ignores any stale state the caller might
+        # have read before the action fired. Concurrent SUCCESS sync on the same
+        # token will block here until we commit / rollback.
+        locked_token = AssetToken.objects.select_for_update().get(pk=token.pk)
 
-    payloads = token.payloads.select_related('proposal').filter(
-        proposal__proposal_status=Proposal.VOTED,
-        proposal__onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUCCESS,
-    ).order_by('proposal__end_at', 'proposal__id')
+        payloads = locked_token.payloads.select_related('proposal').filter(
+            proposal__proposal_status=Proposal.VOTED,
+            proposal__onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUCCESS,
+        ).order_by('proposal__end_at', 'proposal__id')
 
-    new_whitelisted = False
-    new_whitelisted_since = None
-    new_unwhitelisted_since = None
-    new_last_execution_at = None
-    for payload in payloads:
-        p = payload.proposal
-        ts = p.end_at
-        if p.proposal_type == Proposal.PROPOSAL_TYPE_ADD_ASSET:
-            new_whitelisted = True
-            new_whitelisted_since = ts
-        elif p.proposal_type == Proposal.PROPOSAL_TYPE_REMOVE_ASSET:
-            new_whitelisted = False
-            new_unwhitelisted_since = ts
-        new_last_execution_at = ts
+        new_whitelisted = False
+        new_whitelisted_since = None
+        new_unwhitelisted_since = None
+        new_last_execution_at = None
+        for payload in payloads:
+            p = payload.proposal
+            ts = p.end_at
+            if p.proposal_type == Proposal.PROPOSAL_TYPE_ADD_ASSET:
+                new_whitelisted = True
+                new_whitelisted_since = ts
+            elif p.proposal_type == Proposal.PROPOSAL_TYPE_REMOVE_ASSET:
+                new_whitelisted = False
+                new_unwhitelisted_since = ts
+            new_last_execution_at = ts
 
-    token.whitelisted = new_whitelisted
-    token.whitelisted_since = new_whitelisted_since
-    token.unwhitelisted_since = new_unwhitelisted_since
-    token.last_execution_at = new_last_execution_at
-    token.save(update_fields=[
-        'whitelisted', 'whitelisted_since', 'unwhitelisted_since',
-        'last_execution_at', 'updated_at',
-    ])
+        locked_token.whitelisted = new_whitelisted
+        locked_token.whitelisted_since = new_whitelisted_since
+        locked_token.unwhitelisted_since = new_unwhitelisted_since
+        locked_token.last_execution_at = new_last_execution_at
+        locked_token.save(update_fields=[
+            'whitelisted', 'whitelisted_since', 'unwhitelisted_since',
+            'last_execution_at', 'updated_at',
+        ])
 
 
 @admin.register(AssetToken)
