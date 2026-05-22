@@ -1,7 +1,7 @@
 from datetime import datetime, timezone as dt_timezone
 
 from django.conf import settings
-from django.db.models import Prefetch
+from django.db.models import F, Prefetch
 from django.http import Http404
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
@@ -60,7 +60,15 @@ class AssetTokenView(ListModelMixin, GenericViewSet):
                 'payloads',
                 queryset=visible_payloads,
             ),
-        ).order_by('-last_execution_at', '-created_at')
+        ).order_by(
+            # X6 (audit finding): Postgres default for `ORDER BY x DESC` is NULLS
+            # FIRST, which would put never-executed tokens (DISCUSSION/VOTING-only)
+            # ABOVE tokens with confirmed onchain executions. Pin to NULLS LAST so
+            # the most-recently-executed token leads the list and unexecuted tokens
+            # tail-anchor by created_at.
+            F('last_execution_at').desc(nulls_last=True),
+            '-created_at',
+        )
 
 
 class ProposalsView(ListModelMixin, RetrieveModelMixin, CreateModelMixin, GenericViewSet):
