@@ -1,4 +1,6 @@
-from django.contrib import admin
+import logging
+
+from django.contrib import admin, messages
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
 
@@ -6,6 +8,14 @@ from aqua_governance.governance.asset_proposal_writer import upsert_asset_record
 from aqua_governance.governance.asset_serializer_fields import ASSET_FIELDS
 from aqua_governance.governance.forms import ProposalAdminForm
 from aqua_governance.governance.models import AssetProposalPayload, AssetToken, LogVote, Proposal
+from aqua_governance.governance.onchain_hooks.asset_registry import (
+    OnchainReadError,
+    read_onchain_whitelist_state,
+    submit_reconciliation_action,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 @admin.register(Proposal)
@@ -348,6 +358,122 @@ def _recompute_whitelisted_from_history(token):
         ])
 
 
+class _ReconciliationInSync(Exception):
+    """Internal signal: token already matches contract; no action taken."""
+
+
+class _ReconciliationDiverged(Exception):
+    """Internal signal: divergence found and reconciliation tx submitted."""
+
+
+class _ReconciliationRefusedInFlight(Exception):
+    """Internal signal: skipped because a normal execution is still SUBMITTED."""
+
+
+class _ReconciliationRefusedNoAuthority(Exception):
+    """Internal signal: skipped because no VOTED+SUCCESS proposal exists to anchor the tx."""
+
+
+def _reconcile_token_with_onchain(token, request, modeladmin):
+    """Single-token reconciliation logic.
+
+    Wrapped in `transaction.atomic()` so the AssetToken row lock is released
+    only after the (possibly slow) Soroban submit returns. This deliberately
+    holds the row lock for the duration of the tx submission — manual admin
+    button, low-frequency, accepted trade-off.
+    """
+    with transaction.atomic():
+        locked_token = AssetToken.objects.select_for_update().get(pk=token.pk)
+
+        # SUBMITTED-in-flight blocker: if any proposal for this token is
+        # currently waiting on its own onchain confirmation, racing a manual
+        # reconciliation tx could double-write the same final state or worse.
+        in_flight = Proposal.objects.filter(
+            asset_payload__asset_token_id=locked_token.pk,
+            onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUBMITTED,
+        ).exists()
+        if in_flight:
+            modeladmin.message_user(
+                request,
+                f'{locked_token.contract_address}: refused — a proposal is mid-flight '
+                f'(onchain_execution_status=SUBMITTED). Wait for it to settle and retry.',
+                level=messages.WARNING,
+            )
+            raise _ReconciliationRefusedInFlight()
+
+        try:
+            onchain_state = read_onchain_whitelist_state(locked_token.contract_address)
+        except OnchainReadError as exc:
+            modeladmin.message_user(
+                request,
+                f'{locked_token.contract_address}: onchain read failed — {exc}',
+                level=messages.ERROR,
+            )
+            raise
+
+        db_state = bool(locked_token.whitelisted)
+        if db_state == onchain_state:
+            modeladmin.message_user(
+                request,
+                f'{locked_token.contract_address}: in sync (db={db_state}, chain={onchain_state}).',
+            )
+            raise _ReconciliationInSync()
+
+        # Divergence — need governance authority (latest VOTED+SUCCESS proposal
+        # for this token) to anchor the reconciliation tx.
+        source_payload = (
+            AssetProposalPayload.objects
+            .select_related('proposal')
+            .filter(
+                asset_token_id=locked_token.pk,
+                proposal__proposal_status=Proposal.VOTED,
+                proposal__onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUCCESS,
+            )
+            .order_by('-proposal__end_at', '-proposal__id')
+            .first()
+        )
+        if source_payload is None:
+            modeladmin.message_user(
+                request,
+                f'{locked_token.contract_address}: refused — no VOTED+SUCCESS proposal '
+                f'authority for the current DB state (db={db_state}, chain={onchain_state}). '
+                f'Run a governance proposal first.',
+                level=messages.ERROR,
+            )
+            raise _ReconciliationRefusedNoAuthority()
+
+        source_proposal_id = source_payload.proposal_id
+        try:
+            tx_hash = submit_reconciliation_action(
+                source_proposal_id=source_proposal_id,
+                asset_contract_address=locked_token.contract_address,
+                allowed=db_state,
+            )
+        except Exception as exc:
+            logger.exception(
+                'Reconciliation submit failed for token %s (source_proposal_id=%s): %s',
+                locked_token.contract_address, source_proposal_id, exc,
+            )
+            modeladmin.message_user(
+                request,
+                f'{locked_token.contract_address}: reconciliation tx submit failed — {exc}',
+                level=messages.ERROR,
+            )
+            raise
+
+        logger.info(
+            'Reconciliation tx submitted for token %s: db=%s chain_was=%s source_proposal_id=%s tx_hash=%s',
+            locked_token.contract_address, db_state, onchain_state, source_proposal_id, tx_hash,
+        )
+        modeladmin.message_user(
+            request,
+            f'{locked_token.contract_address}: corrected (db={db_state}, was chain={onchain_state}) '
+            f'via source proposal #{source_proposal_id}. tx_hash={tx_hash}',
+            level=messages.SUCCESS,
+        )
+        raise _ReconciliationDiverged()
+
+
 @admin.register(AssetToken)
 class AssetTokenAdmin(admin.ModelAdmin):
     list_display = (
@@ -361,13 +487,71 @@ class AssetTokenAdmin(admin.ModelAdmin):
         'whitelisted_since', 'unwhitelisted_since', 'last_execution_at',
         'created_at', 'updated_at',
     )
-    actions = ['recompute_whitelisted_from_history']
+    actions = ['recompute_whitelisted_from_history', 'sync_with_onchain_contract']
 
     def has_add_permission(self, request):
         return False
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+    def sync_with_onchain_contract(self, request, queryset):
+        """Reconcile selected tokens against the asset-registry contract.
+
+        DB is treated as source of truth. For each selected token:
+          1. Lock the AssetToken row.
+          2. Refuse if any of its proposals is mid-flight (SUBMITTED) — wait
+             for normal execution to settle to avoid double-writes onchain.
+          3. Read current contract state via `read_onchain_whitelist_state`.
+          4. If equal — log "in sync".
+          5. If diverged — find the latest VOTED+SUCCESS proposal for this
+             token (governance authority). If none → refuse with clear error.
+             Otherwise push a single-asset reconciliation tx under that
+             proposal's id with `allowed = DB.whitelisted`.
+
+        Tx hash is logged + surfaced to the operator; we do NOT store it on
+        AssetToken (deliberately MVP-light; chain history is the audit trail).
+        """
+        in_sync = 0
+        diverged = 0
+        refused_in_flight = 0
+        refused_no_authority = 0
+        errors = 0
+
+        for token in queryset:
+            try:
+                _reconcile_token_with_onchain(token, request, self)
+                # Per-token outcome messages are emitted inside the helper;
+                # this loop only tallies success without sub-classifying.
+            except _ReconciliationInSync:
+                in_sync += 1
+            except _ReconciliationDiverged:
+                diverged += 1
+            except _ReconciliationRefusedInFlight:
+                refused_in_flight += 1
+            except _ReconciliationRefusedNoAuthority:
+                refused_no_authority += 1
+            except Exception as exc:
+                errors += 1
+                logger.exception(
+                    'sync_with_onchain_contract failed for token %s: %s',
+                    token.contract_address, exc,
+                )
+                self.message_user(
+                    request,
+                    f'{token.contract_address}: error — {exc}',
+                    level=messages.ERROR,
+                )
+
+        summary = (
+            f'Sync complete. in_sync={in_sync} corrected={diverged} '
+            f'refused_in_flight={refused_in_flight} refused_no_authority={refused_no_authority} '
+            f'errors={errors}'
+        )
+        self.message_user(request, summary)
+    sync_with_onchain_contract.short_description = (
+        'Sync with onchain contract (DB is source of truth — pushes corrections to chain)'
+    )
 
     def recompute_whitelisted_from_history(self, request, queryset):
         """Safety-net action: recompute `whitelisted` from VOTED+SUCCESS history.
