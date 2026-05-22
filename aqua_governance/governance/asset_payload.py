@@ -1,5 +1,9 @@
+import logging
+
 from django.conf import settings
 from stellar_sdk import Address, Asset, StrKey
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_asset_addresses(args: list[str]) -> list[str]:
@@ -33,6 +37,43 @@ def validate_asset_payload(
     asset_contract_address,
     require_onchain_verification: bool,
 ) -> list[str]:
+    """Validate asset payload shape and derive the canonical contract_address(es).
+
+    What IS validated by this function:
+      - Classic pair: asset_code + asset_issuer presented together (both or neither).
+      - asset_issuer is a syntactically valid Ed25519 public key.
+      - Classic pair derives via Asset.contract_id(NETWORK_PASSPHRASE) without raising.
+      - asset_contract_address parses as a Soroban Address.
+      - If both classic and explicit contract address are given, the explicit one
+        equals the derived one.
+
+    What IS NOT validated even when `require_onchain_verification=True` (audit
+    finding X7, 2026-05-21-stage-2-single-shot-findings):
+      - Horizon `/accounts/<asset_issuer>` existence — issuer account may not yet
+        exist on chain at proposal-create time. Verifying here would reject
+        legitimate pre-funding workflows.
+      - Soroban contract instance existence via `getLedgerEntries` — the SAC
+        (Stellar Asset Contract) may not be deployed yet at vote time; the
+        on-chain `asset-registry.execute_proposal` call is the contract's own
+        validation gate at execution time.
+
+    The `require_onchain_verification` parameter is currently a NO-OP and is
+    preserved on the signature only to avoid a breaking call-site change. When
+    `True`, an info-level log emits so on-chain calibration is visible in audit
+    trails. Proper Horizon + Soroban RPC verification (with 5s timeout, retry-
+    once, fail-closed semantics) is tracked in codex-space inbox as Stage-3-
+    adjacent work.
+
+    Returns:
+      list[str]: canonical Soroban contract address(es), normalized.
+    """
+    if require_onchain_verification:
+        logger.info(
+            'validate_asset_payload called with require_onchain_verification=True, '
+            'but on-chain verification is not implemented (audit finding X7, deferred). '
+            'Payload shape will still be validated.',
+        )
+
     normalized_asset_code = str(asset_code).strip() if asset_code is not None else ''
     normalized_asset_issuer = str(asset_issuer).strip() if asset_issuer is not None else ''
     normalized_contract_address = str(asset_contract_address).strip() if asset_contract_address is not None else ''
