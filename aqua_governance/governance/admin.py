@@ -1,9 +1,11 @@
 from django.contrib import admin
 from django.core.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Count
 
+from aqua_governance.governance.asset_tokens import upsert_asset_token_from_proposal
 from aqua_governance.governance.forms import ProposalAdminForm
-from aqua_governance.governance.models import LogVote, Proposal
+from aqua_governance.governance.models import AssetToken, LogVote, Proposal
 
 
 @admin.register(Proposal)
@@ -141,6 +143,8 @@ class ProposalAdmin(admin.ModelAdmin):
         if not request.user.is_superuser and not obj.is_asset_proposal:
             raise PermissionDenied('Managers can manage only asset proposals.')
         super().save_model(request, obj, form, change)
+        if obj.is_asset_proposal:
+            upsert_asset_token_from_proposal(obj, save=True)
 
     def _list_display_quorum(self, obj):
         if obj.vote_for_result + obj.vote_against_result + obj.vote_abstain_result >= (
@@ -205,3 +209,74 @@ class LogVoteAdmin(admin.ModelAdmin):
 
     def has_add_permission(self, request):
         return False
+
+
+@admin.register(AssetToken)
+class AssetTokenAdmin(admin.ModelAdmin):
+    list_display = [
+        'contract_address',
+        'classic_code',
+        'classic_issuer',
+        'whitelisted',
+        'whitelisted_since',
+        'unwhitelisted_since',
+        'last_execution_at',
+        '_proposal_count',
+        'created_at',
+        'updated_at',
+    ]
+    search_fields = [
+        '=contract_address',
+        'classic_code',
+        'classic_issuer',
+    ]
+    list_filter = [
+        'whitelisted',
+        ('whitelisted_since', admin.DateFieldListFilter),
+        ('unwhitelisted_since', admin.DateFieldListFilter),
+        ('last_execution_at', admin.DateFieldListFilter),
+        ('created_at', admin.DateFieldListFilter),
+    ]
+    ordering = ['-last_execution_at', '-created_at']
+    readonly_fields = [
+        'contract_address',
+        'classic_code',
+        'classic_issuer',
+        'whitelisted',
+        'whitelisted_since',
+        'unwhitelisted_since',
+        'last_execution_at',
+        'created_at',
+        'updated_at',
+    ]
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(proposal_count=Count('proposals'))
+
+    def has_module_permission(self, request):
+        return bool(
+            request.user.is_superuser
+            or request.user.has_perm('governance.manage_asset_proposals')
+        )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_view_permission(self, request, obj=None):
+        if request.user.is_superuser:
+            return True
+        return bool(
+            request.user.is_authenticated
+            and request.user.has_perm('governance.manage_asset_proposals')
+        )
+
+    def _proposal_count(self, obj):
+        return getattr(obj, 'proposal_count', obj.proposals.count())
+
+    _proposal_count.short_description = 'Proposals'

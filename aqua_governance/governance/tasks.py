@@ -10,7 +10,8 @@ from stellar_sdk import Server
 from stellar_sdk.soroban_rpc import GetTransactionStatus
 
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
-from aqua_governance.governance.models import Proposal
+from aqua_governance.governance.asset_tokens import upsert_asset_token_from_proposal
+from aqua_governance.governance.models import AssetToken, Proposal
 from aqua_governance.governance.onchain_hooks import execute_onchain_action
 from aqua_governance.governance.onchain_hooks.soroban import get_soroban_transaction
 from aqua_governance.governance.task_logic.proposal_finalization import (
@@ -280,6 +281,37 @@ def task_execute_onchain_action_send(proposal_id: int):
     )
 
 
+def _sync_asset_token_on_success(proposal_id: int) -> None:
+    with transaction.atomic():
+        proposal = Proposal.objects.select_for_update().get(id=proposal_id)
+        if proposal.onchain_execution_status != Proposal.ONCHAIN_EXECUTION_SUBMITTED:
+            return
+
+        if proposal.is_asset_proposal:
+            token = proposal.asset_token
+            if token is None:
+                token = upsert_asset_token_from_proposal(proposal, save=True)
+            if token is None:
+                raise ValueError(f'Asset proposal {proposal.id} has no AssetToken to sync.')
+
+            token = AssetToken.objects.select_for_update().get(pk=token.pk)
+            execution_at = timezone.now()
+            update_fields = ['whitelisted', 'last_execution_at']
+            if proposal.proposal_type == Proposal.PROPOSAL_TYPE_ADD_ASSET:
+                token.whitelisted = True
+                token.whitelisted_since = execution_at
+                update_fields.append('whitelisted_since')
+            elif proposal.proposal_type == Proposal.PROPOSAL_TYPE_REMOVE_ASSET:
+                token.whitelisted = False
+                token.unwhitelisted_since = execution_at
+                update_fields.append('unwhitelisted_since')
+            token.last_execution_at = execution_at
+            token.save(update_fields=update_fields)
+
+        proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_SUCCESS
+        proposal.save(update_fields=['onchain_execution_status'])
+
+
 @celery_app.task(ignore_result=True)
 def task_poll_submitted_onchain_executions():
     proposals = Proposal.objects.filter(
@@ -311,9 +343,19 @@ def task_poll_submitted_onchain_executions():
             continue
 
         if result.status == GetTransactionStatus.SUCCESS:
-            Proposal.objects.filter(id=proposal.id).update(
-                onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUCCESS,
-            )
+            try:
+                _sync_asset_token_on_success(proposal.id)
+            except Exception:
+                logger.exception(
+                    'Failed to sync AssetToken after Soroban success for proposal %s tx=%s.',
+                    proposal.id,
+                    proposal.onchain_execution_tx_hash,
+                )
+                next_poll_count = proposal.onchain_execution_poll_count + 1
+                update_kwargs = {'onchain_execution_poll_count': next_poll_count}
+                if next_poll_count >= settings.ONCHAIN_TX_MAX_POLLS:
+                    update_kwargs['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW
+                Proposal.objects.filter(id=proposal.id).update(**update_kwargs)
             continue
 
         if result.status == GetTransactionStatus.FAILED:

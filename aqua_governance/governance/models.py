@@ -13,7 +13,55 @@ from model_utils import FieldTracker
 from stellar_sdk import Keypair
 
 
-class Proposal(models.Model):
+class AssetToken(models.Model):
+    contract_address = models.CharField(max_length=128, primary_key=True)
+    classic_code = models.CharField(max_length=64, null=True, blank=True)
+    classic_issuer = models.CharField(max_length=56, null=True, blank=True)
+    whitelisted = models.BooleanField(default=False)
+    whitelisted_since = models.DateTimeField(null=True, blank=True)
+    unwhitelisted_since = models.DateTimeField(null=True, blank=True)
+    last_execution_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.contract_address
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['last_execution_at'], name='gov_assettoken_last_exec_at'),
+        ]
+
+
+class AssetProposalInfo(models.Model):
+    # Mandatory only for asset proposal types.
+    asset_code = models.CharField(max_length=64, null=True, blank=True)
+    asset_issuer = models.CharField(max_length=56, null=True, blank=True)
+    asset_contract_address = models.CharField(max_length=128, null=True, blank=True)
+    asset_issuer_information = models.TextField(null=True, blank=True)
+    asset_token_description = models.TextField(null=True, blank=True)
+    asset_holder_distribution = models.TextField(null=True, blank=True)
+    asset_liquidity = models.TextField(null=True, blank=True)
+    asset_trading_volume = models.TextField(null=True, blank=True)
+    asset_audit_info = models.TextField(null=True, blank=True)
+    asset_stellar_flags = models.TextField(null=True, blank=True)
+    asset_related_projects = models.TextField(null=True, blank=True)
+    asset_community_references = models.TextField(null=True, blank=True)
+    asset_aquarius_traction = models.TextField(null=True, blank=True)
+    asset_issuer_commitments = models.TextField(null=True, blank=True)
+    asset_token = models.ForeignKey(
+        AssetToken,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name='proposals',
+    )
+
+    class Meta:
+        abstract = True
+
+
+class Proposal(AssetProposalInfo):
     HORIZON_ERROR = payment_statuses.HORIZON_ERROR
     BAD_MEMO = payment_statuses.BAD_MEMO
     INVALID_PAYMENT = payment_statuses.INVALID_PAYMENT
@@ -159,21 +207,6 @@ class Proposal(models.Model):
     )
     action = models.CharField(choices=PROPOSAL_ACTION_CHOICES, max_length=64, default=NONE)
 
-    # Asset proposal payload (section 5). Mandatory only for proposal_type=ASSET.
-    asset_code = models.CharField(max_length=64, null=True, blank=True)
-    asset_issuer = models.CharField(max_length=56, null=True, blank=True)
-    asset_contract_address = models.CharField(max_length=128, null=True, blank=True)
-    asset_issuer_information = models.TextField(null=True, blank=True)
-    asset_token_description = models.TextField(null=True, blank=True)
-    asset_holder_distribution = models.TextField(null=True, blank=True)
-    asset_liquidity = models.TextField(null=True, blank=True)
-    asset_trading_volume = models.TextField(null=True, blank=True)
-    asset_audit_info = models.TextField(null=True, blank=True)
-    asset_stellar_flags = models.TextField(null=True, blank=True)
-    asset_related_projects = models.TextField(null=True, blank=True)
-    asset_community_references = models.TextField(null=True, blank=True)
-    asset_aquarius_traction = models.TextField(null=True, blank=True)
-    asset_issuer_commitments = models.TextField(null=True, blank=True)
     onchain_execution_status = models.CharField(
         choices=ONCHAIN_EXECUTION_STATUS_CHOICES,
         max_length=32,
@@ -274,6 +307,8 @@ class Proposal(models.Model):
     def onchain_action_args(self) -> list[str]:
         if not self.is_asset_proposal:
             return []
+        if self.asset_token_id:
+            return [self.asset_token.contract_address]
 
         return derive_proposal_onchain_action_args(
             asset_code=self.asset_code,
@@ -351,6 +386,9 @@ class Proposal(models.Model):
             })
 
     class Meta:
+        indexes = [
+            models.Index(fields=['asset_token', 'hide', 'draft'], name='gov_proposal_at_hidedraft'),
+        ]
         permissions = [
             ('manage_asset_proposals', 'Can manage asset proposals in admin'),
         ]
