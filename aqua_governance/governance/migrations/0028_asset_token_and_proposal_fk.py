@@ -117,6 +117,10 @@ class Migration(migrations.Migration):
                 ('last_execution_at', models.DateTimeField(blank=True, null=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
                 ('updated_at', models.DateTimeField(auto_now=True)),
+                ('contract_sync_status', models.CharField(choices=[('SYNCED', 'Contract is up to date with DB state'), ('PENDING', 'Waiting for contract update'), ('FAILED', 'Contract update failed'), ('REQUIRES_REVIEW', 'Contract update requires manual review')], db_index=True, default='SYNCED', max_length=16)),
+                ('contract_sync_tx_hash', models.CharField(blank=True, max_length=128, null=True)),
+                ('contract_sync_updated_at', models.DateTimeField(blank=True, null=True)),
+                ('contract_sync_error', models.TextField(blank=True, null=True)),
             ],
             options={
                 'indexes': [
