@@ -56,7 +56,7 @@ def setup_periodic_tasks(sender, **kwargs):
         },
         'aqua_governance.governance.tasks.task_retry_failed_onchain_executions': {
             'task': 'aqua_governance.governance.tasks.task_retry_failed_onchain_executions',
-            'schedule': crontab(minute='*/10'),
+            'schedule': crontab(minute='*/1'),
             'args': (),
         },
     })

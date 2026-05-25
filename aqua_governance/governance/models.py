@@ -14,6 +14,17 @@ from stellar_sdk import Keypair
 
 
 class AssetToken(models.Model):
+    CONTRACT_SYNC_PENDING = 'PENDING'
+    CONTRACT_SYNC_SYNCED = 'SYNCED'
+    CONTRACT_SYNC_FAILED = 'FAILED'
+    CONTRACT_SYNC_REQUIRES_REVIEW = 'REQUIRES_REVIEW'
+    CONTRACT_SYNC_STATUS_CHOICES = (
+        (CONTRACT_SYNC_SYNCED, 'Contract is up to date with DB state'),
+        (CONTRACT_SYNC_PENDING, 'Waiting for contract update'),
+        (CONTRACT_SYNC_FAILED, 'Contract update failed'),
+        (CONTRACT_SYNC_REQUIRES_REVIEW, 'Contract update requires manual review'),
+    )
+
     contract_address = models.CharField(max_length=128, primary_key=True)
     classic_code = models.CharField(max_length=64, null=True, blank=True)
     classic_issuer = models.CharField(max_length=56, null=True, blank=True)
@@ -23,6 +34,19 @@ class AssetToken(models.Model):
     last_execution_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    # Contract synchronisation state: tracks whether the on-chain asset-registry
+    # contract reflects the DB whitelisted flag.
+    # Default SYNCED ensures backfilled tokens from 0028 (which already passed
+    # on-chain execution) are treated as consistent with the contract.
+    contract_sync_status = models.CharField(
+        choices=CONTRACT_SYNC_STATUS_CHOICES,
+        max_length=16,
+        default=CONTRACT_SYNC_SYNCED,
+        db_index=True,
+    )
+    contract_sync_tx_hash = models.CharField(max_length=128, null=True, blank=True)
+    contract_sync_updated_at = models.DateTimeField(null=True, blank=True)
+    contract_sync_error = models.TextField(null=True, blank=True)
 
     def __str__(self):
         return self.contract_address
@@ -318,6 +342,12 @@ class Proposal(AssetProposalInfo):
 
     def check_transaction(self):
         check_proposal_transaction(self)
+
+    def clean(self):
+        super().clean()
+        if self.is_asset_proposal and self.asset_token_id:
+            from aqua_governance.governance.asset_tokens import validate_asset_token_consistency
+            validate_asset_token_consistency(self)
 
     def save(self, force_insert=False, force_update=False, using=None, update_fields=None):
         if not self.vote_against_issuer:
