@@ -332,7 +332,7 @@ class Proposal(AssetProposalInfo):
         if not self.is_asset_proposal:
             return []
         if self.asset_token_id:
-            return [self.asset_token.contract_address]
+            return [self.asset_token_id]
 
         return derive_proposal_onchain_action_args(
             asset_code=self.asset_code,

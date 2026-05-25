@@ -117,13 +117,13 @@ def apply_asset_proposal_result_to_token(proposal):
         execution_at = timezone.now()
 
         if proposal.proposal_type == Proposal.PROPOSAL_TYPE_ADD_ASSET:
-            token.whitelisted = True
-            if not token.whitelisted_since:
+            if not token.whitelisted:
                 token.whitelisted_since = execution_at
+            token.whitelisted = True
         elif proposal.proposal_type == Proposal.PROPOSAL_TYPE_REMOVE_ASSET:
-            token.whitelisted = False
-            if not token.unwhitelisted_since:
+            if token.whitelisted:
                 token.unwhitelisted_since = execution_at
+            token.whitelisted = False
         else:
             return token
 
