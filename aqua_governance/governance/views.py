@@ -34,12 +34,13 @@ from aqua_governance.governance.serializers import (
     ProposalListSerializer,
 )
 from aqua_governance.governance import serializers_v2
+from aqua_governance.governance.serializers_v2 import AssetTokenSerializer
 
 
 class AssetTokenView(ListModelMixin, GenericViewSet):
     permission_classes = (AllowAny,)
     pagination_class = CustomPageNumberPagination
-    serializer_class = serializers_v2.AssetTokenSerializer
+    serializer_class = AssetTokenSerializer
 
     def get_queryset(self):
         visible_proposals = Proposal.objects.filter(
