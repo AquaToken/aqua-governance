@@ -229,7 +229,8 @@ PROPOSAL_CREATE_OR_UPDATE_COST = env.int('PROPOSAL_CREATE_OR_UPDATE_COST', defau
 EXPIRED_TIME = timedelta(days=env.int('EXPIRED_TIME_DAYS', default=30))
 DISCUSSION_TIME = timedelta(days=env.int('DISCUSSION_TIME_DAYS', default=7))
 DEFAULT_MIN_VOTING_DURATION_DAYS = env.int('DEFAULT_MIN_VOTING_DURATION_DAYS', default=7)
-ASSET_MIN_VOTING_DURATION_DAYS = env.int('ASSET_MIN_VOTING_DURATION_DAYS', default=10)
+ASSET_MIN_VOTING_DURATION_DAYS = env.int('ASSET_MIN_VOTING_DURATION_DAYS', default=7)
+ASSET_QUEUE_GAP_SECONDS = env.int('ASSET_QUEUE_GAP_SECONDS', default=1)
 HORIZON_URL = env('HORIZON_URL', default='https://horizon.stellar.org')
 NETWORK_PASSPHRASE = env('NETWORK_PASSPHRASE', default=Network.public_network().network_passphrase)
 

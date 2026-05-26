@@ -24,6 +24,11 @@ def setup_periodic_tasks(sender, **kwargs):
             'schedule': crontab(minute='*/5'),
             'args': (),
         },
+        'aqua_governance.governance.tasks.task_sync_proposal_statuses_by_time': {
+            'task': 'aqua_governance.governance.tasks.task_sync_proposal_statuses_by_time',
+            'schedule': crontab(minute='*/1'),
+            'args': (),
+        },
         'aqua_governance.governance.tasks.task_check_expired_proposals': {
             'task': 'aqua_governance.governance.tasks.task_check_expired_proposals',
             'schedule': crontab(minute='0', hour='*/24'),
@@ -31,6 +36,11 @@ def setup_periodic_tasks(sender, **kwargs):
         },
         'aqua_governance.governance.tasks.check_proposals_with_bad_horizon_error': {
             'task': 'aqua_governance.governance.tasks.check_proposals_with_bad_horizon_error',
+            'schedule': crontab(minute='*/10'),
+            'args': (),
+        },
+        'aqua_governance.governance.tasks.task_check_pending_proposal_payments': {
+            'task': 'aqua_governance.governance.tasks.task_check_pending_proposal_payments',
             'schedule': crontab(minute='*/10'),
             'args': (),
         },
@@ -46,7 +56,7 @@ def setup_periodic_tasks(sender, **kwargs):
         },
         'aqua_governance.governance.tasks.task_retry_failed_onchain_executions': {
             'task': 'aqua_governance.governance.tasks.task_retry_failed_onchain_executions',
-            'schedule': crontab(minute='*/10'),
+            'schedule': crontab(minute='*/1'),
             'args': (),
         },
     })

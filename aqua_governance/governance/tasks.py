@@ -1,13 +1,16 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from django.conf import settings
+from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from stellar_sdk import Server
 from stellar_sdk.soroban_rpc import GetTransactionStatus
 
-from aqua_governance.governance.models import Proposal
+from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
+from aqua_governance.governance.models import AssetToken, Proposal
 from aqua_governance.governance.onchain_hooks import execute_onchain_action
 from aqua_governance.governance.onchain_hooks.soroban import get_soroban_transaction
 from aqua_governance.governance.task_logic.proposal_finalization import (
@@ -20,6 +23,60 @@ from aqua_governance.governance.task_logic.vote_indexing import (
 from aqua_governance.taskapp import app as celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _start_due_discussion_proposals(now) -> int:
+    started_count = 0
+    with transaction.atomic():
+        acquire_proposal_transition_lock()
+        proposals = list(
+            Proposal.objects.filter(
+                hide=False,
+                draft=False,
+                action=Proposal.NONE,
+                proposal_status=Proposal.DISCUSSION,
+                start_at__lte=now,
+                end_at__gt=now,
+            ).order_by('start_at', 'id'),
+        )
+        for proposal in proposals:
+            locked_proposal = Proposal.objects.select_for_update().get(id=proposal.id)
+            if Proposal.has_voting_activation_conflict(
+                start_at=locked_proposal.start_at,
+                end_at=locked_proposal.end_at,
+                current_proposal_id=locked_proposal.id,
+            ):
+                continue
+            locked_proposal.proposal_status = Proposal.VOTING
+            locked_proposal.save(update_fields=['proposal_status'])
+            started_count += 1
+            # The global voting invariant allows only one proposal to be active at a time.
+            break
+    return started_count
+
+
+def _finish_due_voting_proposals(now) -> None:
+    proposals = Proposal.objects.filter(
+        hide=False,
+        draft=False,
+        proposal_status=Proposal.VOTING,
+        end_at__lte=now,
+    )
+    for proposal in proposals:
+        proposal.proposal_status = Proposal.VOTED
+        proposal.save(update_fields=['proposal_status'])
+        task_update_proposal_results.delay(proposal.id, True)
+
+
+def _expire_missed_discussion_proposals(now) -> int:
+    return Proposal.objects.filter(
+        hide=False,
+        draft=False,
+        action=Proposal.NONE,
+        proposal_status=Proposal.DISCUSSION,
+        start_at__isnull=False,
+        end_at__lte=now,
+    ).update(proposal_status=Proposal.EXPIRED)
 
 
 def _mark_stale_in_progress_onchain_executions_for_review() -> None:
@@ -48,13 +105,72 @@ def _mark_stale_in_progress_onchain_executions_for_review() -> None:
 @celery_app.task(ignore_result=True)
 def task_update_proposal_status(proposal_id):
     """
-    Update proposal status, votes and results before the end of voting.
+    Update proposal status around the configured voting window.
     """
     proposal = Proposal.objects.get(id=proposal_id)
-    if proposal.end_at <= timezone.now() + timedelta(seconds=5) and proposal.proposal_status == Proposal.VOTING:
+    now = timezone.now()
+
+    if proposal.proposal_status == Proposal.VOTED:
+        return
+
+    if (
+        proposal.end_at
+        and proposal.end_at <= now + timedelta(seconds=5)
+        and proposal.proposal_status == Proposal.VOTING
+    ):
         proposal.proposal_status = Proposal.VOTED
-        proposal.save()
+        proposal.save(update_fields=['proposal_status'])
         task_update_proposal_results.delay(proposal.id, True)
+        return
+
+    if (
+        proposal.end_at
+        and proposal.end_at <= now
+        and proposal.proposal_status == Proposal.DISCUSSION
+        and not proposal.draft
+        and not proposal.hide
+        and proposal.action == Proposal.NONE
+    ):
+        proposal.proposal_status = Proposal.EXPIRED
+        proposal.save(update_fields=['proposal_status'])
+        return
+
+    if (
+        proposal.start_at
+        and proposal.end_at
+        and proposal.start_at <= now < proposal.end_at
+        and proposal.proposal_status == Proposal.DISCUSSION
+        and not proposal.draft
+        and not proposal.hide
+        and proposal.action == Proposal.NONE
+    ):
+        with transaction.atomic():
+            acquire_proposal_transition_lock()
+            locked_proposal = Proposal.objects.select_for_update().get(id=proposal_id)
+            if (
+                locked_proposal.start_at
+                and locked_proposal.end_at
+                and locked_proposal.start_at <= now < locked_proposal.end_at
+                and locked_proposal.proposal_status == Proposal.DISCUSSION
+                and not locked_proposal.draft
+                and not locked_proposal.hide
+                and locked_proposal.action == Proposal.NONE
+                and not Proposal.has_voting_activation_conflict(
+                    start_at=locked_proposal.start_at,
+                    end_at=locked_proposal.end_at,
+                    current_proposal_id=locked_proposal.id,
+                )
+            ):
+                locked_proposal.proposal_status = Proposal.VOTING
+                locked_proposal.save(update_fields=['proposal_status'])
+
+
+@celery_app.task(ignore_result=True)
+def task_sync_proposal_statuses_by_time():
+    now = timezone.now()
+    _finish_due_voting_proposals(now)
+    _expire_missed_discussion_proposals(now)
+    _start_due_discussion_proposals(now)
 
 
 @celery_app.task(ignore_result=True)
@@ -62,7 +178,7 @@ def task_update_active_proposals():
     """
     Update active proposals.
     """
-    now = datetime.now()
+    now = timezone.now()
     active_proposals = Proposal.objects.filter(proposal_status=Proposal.VOTING, start_at__lte=now, end_at__gte=now)
 
     for proposal in active_proposals:
@@ -74,9 +190,24 @@ def task_check_expired_proposals():
     """
     Check expired proposals.
     """
-    expired_period = datetime.now() - settings.EXPIRED_TIME
-    proposals = Proposal.objects.filter(proposal_status=Proposal.DISCUSSION, last_updated_at__lte=expired_period)
+    now = timezone.now()
+    expired_period = now - settings.EXPIRED_TIME
+    proposals = Proposal.objects.filter(
+        proposal_status=Proposal.DISCUSSION,
+        last_updated_at__lte=expired_period,
+    ).exclude(
+        proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
+    ).filter(Q(start_at__isnull=True) | Q(start_at__lte=now))
     proposals.update(proposal_status=Proposal.EXPIRED, action=Proposal.NONE)
+
+
+@celery_app.task(ignore_result=True)
+def task_check_pending_proposal_payments():
+    proposals = Proposal.objects.filter(
+        hide=False,
+    ).exclude(action=Proposal.NONE)
+    for proposal in proposals:
+        proposal.check_transaction()
 
 
 @celery_app.task(ignore_result=True)
@@ -139,6 +270,13 @@ def task_execute_onchain_action_send(proposal_id: int):
             onchain_execution_submitted_at=None,
             onchain_execution_poll_count=0,
         )
+        # Mark AssetToken contract sync as FAILED but do NOT revert whitelisted.
+        if proposal.is_asset_proposal and proposal.asset_token_id:
+            AssetToken.objects.filter(pk=proposal.asset_token_id).update(
+                contract_sync_status=AssetToken.CONTRACT_SYNC_FAILED,
+                contract_sync_error='Onchain send failed',
+                contract_sync_updated_at=timezone.now(),
+            )
         return
 
     Proposal.objects.filter(id=proposal_id).update(
@@ -147,6 +285,38 @@ def task_execute_onchain_action_send(proposal_id: int):
         onchain_execution_submitted_at=timezone.now(),
         onchain_execution_poll_count=0,
     )
+
+    # Record the submitted tx hash on AssetToken so the admin/UI can track it.
+    if proposal.is_asset_proposal and proposal.asset_token_id:
+        AssetToken.objects.filter(pk=proposal.asset_token_id).update(
+            contract_sync_tx_hash=tx_hash,
+            contract_sync_updated_at=timezone.now(),
+        )
+
+
+def _sync_asset_token_on_success(proposal_id: int) -> None:
+    """
+    Called after Soroban confirms SUCCESS for an on-chain execution.
+
+    Since the DB whitelisted flag was already updated during finalization
+    (via ``apply_asset_proposal_result_to_token``), this function only needs
+    to mark the on-chain sync status as SYNCED and record the confirmation
+    timestamp.
+    """
+    with transaction.atomic():
+        proposal = Proposal.objects.select_for_update().get(id=proposal_id)
+        if proposal.onchain_execution_status != Proposal.ONCHAIN_EXECUTION_SUBMITTED:
+            return
+
+        if proposal.is_asset_proposal and proposal.asset_token_id:
+            AssetToken.objects.filter(pk=proposal.asset_token_id).update(
+                contract_sync_status=AssetToken.CONTRACT_SYNC_SYNCED,
+                contract_sync_updated_at=timezone.now(),
+                contract_sync_error=None,
+            )
+
+        proposal.onchain_execution_status = Proposal.ONCHAIN_EXECUTION_SUCCESS
+        proposal.save(update_fields=['onchain_execution_status'])
 
 
 @celery_app.task(ignore_result=True)
@@ -177,12 +347,40 @@ def task_poll_submitted_onchain_executions():
                     next_poll_count,
                 )
             Proposal.objects.filter(id=proposal.id).update(**update_kwargs)
+            if next_poll_count >= settings.ONCHAIN_TX_MAX_POLLS and proposal.is_asset_proposal and proposal.asset_token_id:
+                AssetToken.objects.filter(pk=proposal.asset_token_id).update(
+                    contract_sync_status=AssetToken.CONTRACT_SYNC_REQUIRES_REVIEW,
+                    contract_sync_error=(
+                        f'Polling exhausted after {next_poll_count} attempts: '
+                        f'tx={proposal.onchain_execution_tx_hash}'
+                    ),
+                    contract_sync_updated_at=timezone.now(),
+                )
             continue
 
         if result.status == GetTransactionStatus.SUCCESS:
-            Proposal.objects.filter(id=proposal.id).update(
-                onchain_execution_status=Proposal.ONCHAIN_EXECUTION_SUCCESS,
-            )
+            try:
+                _sync_asset_token_on_success(proposal.id)
+            except Exception:
+                logger.exception(
+                    'Failed to sync AssetToken after Soroban success for proposal %s tx=%s.',
+                    proposal.id,
+                    proposal.onchain_execution_tx_hash,
+                )
+                next_poll_count = proposal.onchain_execution_poll_count + 1
+                update_kwargs = {'onchain_execution_poll_count': next_poll_count}
+                if next_poll_count >= settings.ONCHAIN_TX_MAX_POLLS:
+                    update_kwargs['onchain_execution_status'] = Proposal.ONCHAIN_EXECUTION_REQUIRES_REVIEW
+                Proposal.objects.filter(id=proposal.id).update(**update_kwargs)
+                if next_poll_count >= settings.ONCHAIN_TX_MAX_POLLS and proposal.is_asset_proposal and proposal.asset_token_id:
+                    AssetToken.objects.filter(pk=proposal.asset_token_id).update(
+                        contract_sync_status=AssetToken.CONTRACT_SYNC_REQUIRES_REVIEW,
+                        contract_sync_error=(
+                            'Sync failed after Soroban SUCCESS: '
+                            f'tx={proposal.onchain_execution_tx_hash}'
+                        ),
+                        contract_sync_updated_at=timezone.now(),
+                    )
             continue
 
         if result.status == GetTransactionStatus.FAILED:
@@ -192,9 +390,20 @@ def task_poll_submitted_onchain_executions():
                 proposal.onchain_execution_tx_hash,
                 getattr(result, 'result_xdr', None),
             )
+            next_poll_count = proposal.onchain_execution_poll_count + 1
             Proposal.objects.filter(id=proposal.id).update(
                 onchain_execution_status=Proposal.ONCHAIN_EXECUTION_FAILED,
+                onchain_execution_poll_count=next_poll_count,
             )
+            # Mark AssetToken contract sync as FAILED but do NOT revert whitelisted.
+            if proposal.is_asset_proposal and proposal.asset_token_id:
+                AssetToken.objects.filter(pk=proposal.asset_token_id).update(
+                    contract_sync_status=AssetToken.CONTRACT_SYNC_FAILED,
+                    contract_sync_error=(
+                        f'Soroban transaction FAILED: tx={proposal.onchain_execution_tx_hash}'
+                    ),
+                    contract_sync_updated_at=timezone.now(),
+                )
             continue
 
         next_poll_count = proposal.onchain_execution_poll_count + 1
@@ -209,6 +418,15 @@ def task_poll_submitted_onchain_executions():
                 next_poll_count,
             )
         Proposal.objects.filter(id=proposal.id).update(**update_kwargs)
+        if next_poll_count >= settings.ONCHAIN_TX_MAX_POLLS and proposal.is_asset_proposal and proposal.asset_token_id:
+            AssetToken.objects.filter(pk=proposal.asset_token_id).update(
+                contract_sync_status=AssetToken.CONTRACT_SYNC_REQUIRES_REVIEW,
+                contract_sync_error=(
+                    f'Polling NOT_FOUND exhausted after {next_poll_count} attempts: '
+                    f'tx={proposal.onchain_execution_tx_hash}'
+                ),
+                contract_sync_updated_at=timezone.now(),
+            )
 
 
 @celery_app.task(ignore_result=True)
