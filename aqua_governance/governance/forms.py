@@ -134,7 +134,18 @@ class ProposalAdminForm(forms.ModelForm):
             start_at = None
             end_at = None
 
-        if target_status in (Proposal.DISCUSSION, Proposal.VOTING):
+        # Detect whether start_at or end_at changed vs the persisted instance.
+        if self.instance._state.adding:
+            start_at_changed = start_at is not None
+            end_at_changed = end_at is not None
+        else:
+            start_at_changed = 'start_at' in cleaned_data and cleaned_data['start_at'] != self.instance.start_at
+            end_at_changed = 'end_at' in cleaned_data and cleaned_data['end_at'] != self.instance.end_at
+
+        times_changed = start_at_changed or end_at_changed
+        is_active_status = target_status in (Proposal.DISCUSSION, Proposal.VOTING)
+
+        if is_active_status or times_changed:
             acquire_proposal_transition_lock()
             interval_lock_acquired = True
             if target_status == Proposal.VOTING and (not start_at or not end_at):
@@ -143,7 +154,7 @@ class ProposalAdminForm(forms.ModelForm):
                     'end_at': 'end_at is required for an active proposal.',
                 })
             if start_at and end_at:
-                if end_at <= timezone.now():
+                if is_active_status and end_at <= timezone.now():
                     raise ValidationError({'end_at': 'end_at must be in the future.'})
                 current_proposal_id = None if self.instance._state.adding else self.instance.id
                 if Proposal.has_voting_interval_conflict(
