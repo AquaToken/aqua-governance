@@ -43,13 +43,12 @@ class AssetTokenView(ListModelMixin, GenericViewSet):
     serializer_class = AssetTokenSerializer
 
     def get_queryset(self):
-        visible_proposals = Proposal.objects.filter(
+        linked_proposals = Proposal.objects.filter(
             asset_token_id=OuterRef('pk'),
-            hide=False,
             draft=False,
         )
         return (
-            AssetToken.objects.filter(Exists(visible_proposals))
+            AssetToken.objects.filter(Exists(linked_proposals))
             .prefetch_related(
                 Prefetch(
                     "proposals",
