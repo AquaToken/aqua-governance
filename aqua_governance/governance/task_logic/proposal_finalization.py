@@ -57,18 +57,6 @@ def update_proposal_final_results(proposal_id: int) -> None:
     _execute_onchain_action_if_needed(proposal, has_fresh_ice_supply=has_fresh_ice_supply)
 
 
-def retry_onchain_execution_for_voted_proposal(proposal_id: int) -> None:
-    proposal = Proposal.objects.get(id=proposal_id)
-    if proposal.proposal_status != Proposal.VOTED:
-        return
-
-    has_fresh_ice_supply = _update_ice_circulating_supply(proposal)
-    if has_fresh_ice_supply:
-        proposal.save(update_fields=['ice_circulating_supply'])
-
-    _execute_onchain_action_if_needed(proposal, has_fresh_ice_supply=has_fresh_ice_supply)
-
-
 def _update_ice_circulating_supply(proposal: Proposal) -> bool:
     try:
         response = requests.get(settings.ICE_CIRCULATING_URL, timeout=10)
