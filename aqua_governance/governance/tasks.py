@@ -14,7 +14,6 @@ from aqua_governance.governance.models import AssetToken, Proposal
 from aqua_governance.governance.onchain_hooks import execute_onchain_action
 from aqua_governance.governance.onchain_hooks.soroban import get_soroban_transaction
 from aqua_governance.governance.task_logic.proposal_finalization import (
-    retry_onchain_execution_for_voted_proposal,
     update_proposal_final_results,
 )
 from aqua_governance.governance.task_logic.vote_indexing import (
@@ -443,7 +442,9 @@ def task_retry_failed_onchain_executions():
     ).order_by('-id')
 
     for proposal in proposals:
-        retry_onchain_execution_for_voted_proposal(proposal.id)
+        # Retry through the final-results pipeline so votes are recomputed/frozen
+        # before any DB whitelist changes or onchain execution decisions happen.
+        task_update_proposal_results(proposal.id, True)
 
 
 @celery_app.task(ignore_result=True)

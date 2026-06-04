@@ -1,5 +1,3 @@
-from datetime import timedelta
-
 from django import forms
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -66,23 +64,7 @@ class ProposalAdminForm(forms.ModelForm):
         if self.initial.get('start_at') or self.initial.get('end_at'):
             return
 
-        last = (
-            Proposal.objects
-            .filter(
-                hide=False,
-                draft=False,
-                proposal_status__in=(Proposal.DISCUSSION, Proposal.VOTING),
-                end_at__isnull=False,
-            )
-            .order_by('-end_at')
-            .first()
-        )
-        now = timezone.now()
-        if last and last.end_at > now:
-            start_at = last.end_at + timedelta(seconds=settings.ASSET_QUEUE_GAP_SECONDS)
-        else:
-            start_at = now
-        end_at = start_at + timedelta(days=settings.ASSET_MIN_VOTING_DURATION_DAYS)
+        start_at, end_at = Proposal.compute_asset_queue_window()
         self.initial['start_at'] = start_at
         self.initial['end_at'] = end_at
 
