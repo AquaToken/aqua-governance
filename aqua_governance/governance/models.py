@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import requests
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -298,6 +300,39 @@ class Proposal(AssetProposalInfo):
             end_at=end_at,
             current_proposal_id=current_proposal_id,
         )
+
+    @classmethod
+    def compute_asset_queue_window(cls):
+        """Return (start_at, end_at) for a new asset proposal based on queue position.
+
+        start_at is set immediately after the latest non-hidden DISCUSSION/VOTING
+        proposal whose end_at lies in the future, plus
+        ``settings.ASSET_QUEUE_GAP_SECONDS``.  Draft asset proposals (which already
+        have start/end windows and can later become visible) are included; draft
+        GENERAL proposals are excluded.  If no such proposal exists, start_at
+        defaults to ``timezone.now()``.
+        end_at = start_at + ``settings.ASSET_MIN_VOTING_DURATION_DAYS`` days.
+        """
+        last = (
+            cls.objects
+            .filter(
+                hide=False,
+                proposal_status__in=(cls.DISCUSSION, cls.VOTING),
+                end_at__isnull=False,
+            )
+            .filter(
+                Q(draft=False) | Q(proposal_type__in=cls.ASSET_PROPOSAL_TYPES),
+            )
+            .order_by('-end_at')
+            .first()
+        )
+        now = timezone.now()
+        if last and last.end_at > now:
+            start_at = last.end_at + timedelta(seconds=settings.ASSET_QUEUE_GAP_SECONDS)
+        else:
+            start_at = now
+        end_at = start_at + timedelta(days=settings.ASSET_MIN_VOTING_DURATION_DAYS)
+        return start_at, end_at
 
     @classmethod
     def has_blocking_voting_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
