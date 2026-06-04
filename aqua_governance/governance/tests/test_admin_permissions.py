@@ -1,0 +1,542 @@
+import json
+from datetime import timedelta
+from unittest.mock import patch
+
+from django.conf import settings
+from django.contrib.admin.sites import AdminSite
+from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Permission
+from django.test import RequestFactory, TestCase
+from django.utils import timezone
+from django_quill.quill import Quill
+
+from aqua_governance.governance.admin import ProposalAdmin
+from aqua_governance.governance.models import Proposal
+from aqua_governance.governance.tests._factories import (
+    DEFAULT_PROPOSED_BY,
+    make_asset_proposal,
+    make_asset_proposal_raw,
+    patch_ice_circulating_supply,
+)
+
+
+class ProposalAdminPermissionTests(TestCase):
+    def setUp(self):
+        self.site = AdminSite()
+        self.admin = ProposalAdmin(Proposal, self.site)
+        self.factory = RequestFactory()
+
+    def _create_user(self, *, is_superuser=False, with_manage_perm=False):
+        user_model = get_user_model()
+        user = user_model.objects.create_user(
+            username=f'user_{is_superuser}_{with_manage_perm}',
+            password='password',
+            is_staff=True,
+            is_superuser=is_superuser,
+        )
+        if with_manage_perm:
+            perm = Permission.objects.get(codename='manage_asset_proposals')
+            user.user_permissions.add(perm)
+        return user
+
+    def _make_proposal(self, proposal_type):
+        if Proposal.is_asset_proposal_type(proposal_type):
+            return make_asset_proposal(proposal_type=proposal_type, title='Test proposal')
+        with patch_ice_circulating_supply():
+            return Proposal.objects.create(
+                proposed_by=DEFAULT_PROPOSED_BY,
+                title='Test proposal',
+                text=Quill(json.dumps({'delta': '', 'html': '<p>Test</p>'})),
+                proposal_type=proposal_type,
+            )
+
+    def _quill_form_value(self, html='<p>Test</p>'):
+        return json.dumps({'delta': '', 'html': html})
+
+    def _split_datetime_form_value(self, value):
+        return {
+            'date': value.strftime('%Y-%m-%d'),
+            'time': value.strftime('%H:%M:%S'),
+        }
+
+    def test_manager_queryset_is_limited_to_asset_proposals(self):
+        general_proposal = self._make_proposal(Proposal.PROPOSAL_TYPE_GENERAL)
+        asset_proposal = self._make_proposal(Proposal.PROPOSAL_TYPE_ADD_ASSET)
+
+        request = self.factory.get('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        queryset = self.admin.get_queryset(request)
+
+        self.assertNotIn(general_proposal, queryset)
+        self.assertIn(asset_proposal, queryset)
+
+    def test_manager_cannot_delete_proposals(self):
+        request = self.factory.get('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        self.assertFalse(self.admin.has_delete_permission(request))
+
+    def test_manager_cannot_change_general_proposals(self):
+        general_proposal = self._make_proposal(Proposal.PROPOSAL_TYPE_GENERAL)
+
+        request = self.factory.get('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        self.assertFalse(self.admin.has_change_permission(request, general_proposal))
+
+    def test_manager_proposal_type_choices_are_asset_only(self):
+        request = self.factory.get('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        form_class = self.admin.get_form(request)
+        form = form_class()
+        choice_values = [choice[0] for choice in form.fields['proposal_type'].choices]
+
+        self.assertEqual(
+            choice_values,
+            [Proposal.PROPOSAL_TYPE_ADD_ASSET, Proposal.PROPOSAL_TYPE_REMOVE_ASSET],
+        )
+
+    def test_manager_cannot_submit_general_proposal_via_tampered_post(self):
+        request = self.factory.post('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        form_class = self.admin.get_form(request)
+        form = form_class(data={
+            'proposed_by': 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+            'title': 'Tampered proposal',
+            'text': self._quill_form_value(),
+            'proposal_type': Proposal.PROPOSAL_TYPE_GENERAL,
+            'transaction_hash': 'a' * 64,
+            'envelope_xdr': 'AAAA',
+            'discord_username': 'manager',
+        })
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('proposal_type', form.errors)
+
+    @patch('aqua_governance.governance.forms.acquire_proposal_transition_lock')
+    def test_manager_can_create_asset_proposal_without_payment_xdr(self, mock_lock):
+        request = self.factory.post('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        form_class = self.admin.get_form(request)
+        form = form_class(data={
+            'proposed_by': 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+            'title': 'Asset proposal',
+            'text': self._quill_form_value(),
+            'proposal_type': Proposal.PROPOSAL_TYPE_ADD_ASSET,
+            'proposal_status': Proposal.DISCUSSION,
+            'discord_username': 'manager',
+            'asset_code': 'AQUA',
+            'asset_issuer': 'GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA',
+            'asset_issuer_information': 'info',
+            'asset_token_description': 'desc',
+            'asset_holder_distribution': 'distribution',
+            'asset_liquidity': 'liquidity',
+            'asset_trading_volume': 'volume',
+            'asset_audit_info': 'audit',
+            'asset_stellar_flags': 'flags',
+            'asset_related_projects': 'projects',
+            'asset_community_references': 'references',
+            'asset_aquarius_traction': 'traction',
+            'asset_issuer_commitments': 'commitments',
+        })
+
+        self.assertTrue(form.is_valid(), form.errors)
+        proposal = form.save(commit=False)
+
+        self.assertFalse(proposal.draft)
+        self.assertEqual(proposal.action, Proposal.NONE)
+        self.assertEqual(proposal.payment_status, Proposal.FINE)
+        self.assertFalse(proposal.hide)
+        mock_lock.assert_called_once_with()
+
+    @patch('aqua_governance.governance.forms.acquire_proposal_transition_lock')
+    def test_manager_can_create_active_asset_proposal_when_none_is_active(self, mock_lock):
+        now = timezone.now()
+        request = self.factory.post('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        form_class = self.admin.get_form(request)
+        form = form_class(data={
+            'proposed_by': 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+            'title': 'Asset proposal',
+            'text': self._quill_form_value(),
+            'proposal_type': Proposal.PROPOSAL_TYPE_ADD_ASSET,
+            'proposal_status': Proposal.VOTING,
+            'start_at_0': self._split_datetime_form_value(now)['date'],
+            'start_at_1': self._split_datetime_form_value(now)['time'],
+            'end_at_0': self._split_datetime_form_value(now + timedelta(days=10))['date'],
+            'end_at_1': self._split_datetime_form_value(now + timedelta(days=10))['time'],
+            'discord_username': 'manager',
+            'asset_code': 'AQUA',
+            'asset_issuer': 'GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA',
+            'asset_issuer_information': 'info',
+            'asset_token_description': 'desc',
+            'asset_holder_distribution': 'distribution',
+            'asset_liquidity': 'liquidity',
+            'asset_trading_volume': 'volume',
+            'asset_audit_info': 'audit',
+            'asset_stellar_flags': 'flags',
+            'asset_related_projects': 'projects',
+            'asset_community_references': 'references',
+            'asset_aquarius_traction': 'traction',
+            'asset_issuer_commitments': 'commitments',
+        })
+
+        self.assertTrue(form.is_valid(), form.errors)
+        mock_lock.assert_called_once_with()
+
+    @patch('aqua_governance.governance.forms.acquire_proposal_transition_lock')
+    def test_manager_can_queue_asset_proposal_when_one_is_active(self, mock_lock):
+        active_proposal = self._make_proposal(Proposal.PROPOSAL_TYPE_ADD_ASSET)
+        active_proposal.proposal_status = Proposal.VOTING
+        active_proposal.save(update_fields=['proposal_status'])
+        request = self.factory.post('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        form_class = self.admin.get_form(request)
+        form = form_class(data={
+            'proposed_by': 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+            'title': 'Asset proposal',
+            'text': self._quill_form_value(),
+            'proposal_type': Proposal.PROPOSAL_TYPE_ADD_ASSET,
+            'discord_username': 'manager',
+            'asset_code': 'AQUA',
+            'asset_issuer': 'GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA',
+            'asset_issuer_information': 'info',
+            'asset_token_description': 'desc',
+            'asset_holder_distribution': 'distribution',
+            'asset_liquidity': 'liquidity',
+            'asset_trading_volume': 'volume',
+            'asset_audit_info': 'audit',
+            'asset_stellar_flags': 'flags',
+            'asset_related_projects': 'projects',
+            'asset_community_references': 'references',
+            'asset_aquarius_traction': 'traction',
+            'asset_issuer_commitments': 'commitments',
+        })
+
+        self.assertTrue(form.is_valid(), form.errors)
+        mock_lock.assert_called_once_with()
+
+    def test_manager_asset_queue_prefill_uses_general_voting_proposal(self):
+        now = timezone.now()
+        blocker = self._make_proposal(Proposal.PROPOSAL_TYPE_GENERAL)
+        blocker.proposal_status = Proposal.VOTING
+        blocker.start_at = now
+        blocker.end_at = now + timedelta(days=10)
+        blocker.save(update_fields=['proposal_status', 'start_at', 'end_at'])
+
+        request = self.factory.get('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        form_class = self.admin.get_form(request)
+        form = form_class()
+
+        expected_start_at = blocker.end_at + timedelta(seconds=settings.ASSET_QUEUE_GAP_SECONDS)
+        expected_end_at = expected_start_at + timedelta(days=settings.ASSET_MIN_VOTING_DURATION_DAYS)
+
+        self.assertEqual(form.initial['start_at'], expected_start_at)
+        self.assertEqual(form.initial['end_at'], expected_end_at)
+
+    @patch('aqua_governance.governance.forms.acquire_proposal_transition_lock')
+    def test_manager_cannot_create_active_asset_proposal_with_overlapping_interval(self, mock_lock):
+        now = timezone.now()
+        active_proposal = self._make_proposal(Proposal.PROPOSAL_TYPE_ADD_ASSET)
+        active_proposal.proposal_status = Proposal.VOTING
+        active_proposal.start_at = now
+        active_proposal.end_at = now + timedelta(days=10)
+        active_proposal.save(update_fields=['proposal_status', 'start_at', 'end_at'])
+        request = self.factory.post('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        form_class = self.admin.get_form(request)
+        form = form_class(data={
+            'proposed_by': 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+            'title': 'Asset proposal',
+            'text': self._quill_form_value(),
+            'proposal_type': Proposal.PROPOSAL_TYPE_ADD_ASSET,
+            'proposal_status': Proposal.VOTING,
+            'start_at_0': self._split_datetime_form_value(now + timedelta(days=9))['date'],
+            'start_at_1': self._split_datetime_form_value(now + timedelta(days=9))['time'],
+            'end_at_0': self._split_datetime_form_value(now + timedelta(days=19))['date'],
+            'end_at_1': self._split_datetime_form_value(now + timedelta(days=19))['time'],
+            'discord_username': 'manager',
+            'asset_code': 'AQUA',
+            'asset_issuer': 'GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA',
+            'asset_issuer_information': 'info',
+            'asset_token_description': 'desc',
+            'asset_holder_distribution': 'distribution',
+            'asset_liquidity': 'liquidity',
+            'asset_trading_volume': 'volume',
+            'asset_audit_info': 'audit',
+            'asset_stellar_flags': 'flags',
+            'asset_related_projects': 'projects',
+            'asset_community_references': 'references',
+            'asset_aquarius_traction': 'traction',
+            'asset_issuer_commitments': 'commitments',
+        })
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('start_at', form.errors)
+        self.assertIn('end_at', form.errors)
+        mock_lock.assert_called_once_with()
+
+    @patch('aqua_governance.governance.forms.acquire_proposal_transition_lock')
+    def test_manager_cannot_create_active_asset_proposal_with_overlapping_general_interval(self, mock_lock):
+        now = timezone.now()
+        active_proposal = self._make_proposal(Proposal.PROPOSAL_TYPE_GENERAL)
+        active_proposal.proposal_status = Proposal.VOTING
+        active_proposal.start_at = now
+        active_proposal.end_at = now + timedelta(days=10)
+        active_proposal.save(update_fields=['proposal_status', 'start_at', 'end_at'])
+        request = self.factory.post('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        form_class = self.admin.get_form(request)
+        form = form_class(data={
+            'proposed_by': 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+            'title': 'Asset proposal',
+            'text': self._quill_form_value(),
+            'proposal_type': Proposal.PROPOSAL_TYPE_ADD_ASSET,
+            'proposal_status': Proposal.VOTING,
+            'start_at_0': self._split_datetime_form_value(now + timedelta(days=9))['date'],
+            'start_at_1': self._split_datetime_form_value(now + timedelta(days=9))['time'],
+            'end_at_0': self._split_datetime_form_value(now + timedelta(days=19))['date'],
+            'end_at_1': self._split_datetime_form_value(now + timedelta(days=19))['time'],
+            'discord_username': 'manager',
+            'asset_code': 'AQUA',
+            'asset_issuer': 'GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA',
+            'asset_issuer_information': 'info',
+            'asset_token_description': 'desc',
+            'asset_holder_distribution': 'distribution',
+            'asset_liquidity': 'liquidity',
+            'asset_trading_volume': 'volume',
+            'asset_audit_info': 'audit',
+            'asset_stellar_flags': 'flags',
+            'asset_related_projects': 'projects',
+            'asset_community_references': 'references',
+            'asset_aquarius_traction': 'traction',
+            'asset_issuer_commitments': 'commitments',
+        })
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('start_at', form.errors)
+        self.assertIn('end_at', form.errors)
+        mock_lock.assert_called_once_with()
+
+    @patch('aqua_governance.governance.forms.acquire_proposal_transition_lock')
+    def test_manager_cannot_edit_voted_asset_proposal_end_at_to_overlap_active_voting(self, mock_lock):
+        """X5 regression: editing `end_at` on a VOTED asset proposal via admin must
+        run the overlap check even though target_status stays VOTED.
+
+        Setup:
+          - Active VOTING proposal occupying days [+1, +10] from now.
+          - VOTED asset proposal (already finished).
+
+        Action: manager opens the VOTED proposal and rewrites end_at into the
+        active window (days [+5, +15]), without touching proposal_status.
+
+        Expectation: form validation rejects with overlap error. Previously
+        (pre-X5) the gate `target_status in (DISCUSSION, VOTING)` skipped the
+        check entirely on VOTED rows, allowing global "one voting at a time"
+        invariant to be violated by an admin edit.
+        """
+        now = timezone.now()
+
+        # Active VOTING proposal — the overlap target.
+        active = self._make_proposal(Proposal.PROPOSAL_TYPE_ADD_ASSET)
+        active.proposal_status = Proposal.VOTING
+        active.start_at = now + timedelta(days=1)
+        active.end_at = now + timedelta(days=10)
+        active.title = 'Active VOTING'
+        active.save(update_fields=['proposal_status', 'start_at', 'end_at', 'title'])
+
+        # VOTED asset proposal — the row the manager is editing.
+        voted = self._make_proposal(Proposal.PROPOSAL_TYPE_ADD_ASSET)
+        voted.proposal_status = Proposal.VOTED
+        voted.start_at = now - timedelta(days=30)
+        voted.end_at = now - timedelta(days=20)
+        voted.title = 'Finished VOTED'
+        voted.save(update_fields=['proposal_status', 'start_at', 'end_at', 'title'])
+
+        request = self.factory.post('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        # Manager edits end_at into the active VOTING window. Proposal status
+        # left as VOTED (the legacy gate exempt VOTED rows from the overlap
+        # check — that's the bug).
+        new_start = now + timedelta(days=5)
+        new_end = now + timedelta(days=15)
+        form_class = self.admin.get_form(request, obj=voted, change=True)
+        form = form_class(
+            instance=voted,
+            data={
+                'proposed_by': voted.proposed_by,
+                'title': voted.title,
+                'text': self._quill_form_value(),
+                'proposal_type': Proposal.PROPOSAL_TYPE_ADD_ASSET,
+                'proposal_status': Proposal.VOTED,
+                'start_at_0': self._split_datetime_form_value(new_start)['date'],
+                'start_at_1': self._split_datetime_form_value(new_start)['time'],
+                'end_at_0': self._split_datetime_form_value(new_end)['date'],
+                'end_at_1': self._split_datetime_form_value(new_end)['time'],
+                'discord_username': 'manager',
+                # asset_code / asset_issuer / asset_contract_address are
+                # `disabled` for existing pk — initial values are used regardless.
+                'asset_issuer_information': 'info',
+                'asset_token_description': 'desc',
+                'asset_holder_distribution': 'distribution',
+                'asset_liquidity': 'liquidity',
+                'asset_trading_volume': 'volume',
+                'asset_audit_info': 'audit',
+                'asset_stellar_flags': 'flags',
+                'asset_related_projects': 'projects',
+                'asset_community_references': 'references',
+                'asset_aquarius_traction': 'traction',
+                'asset_issuer_commitments': 'commitments',
+            },
+        )
+
+        self.assertFalse(form.is_valid(), 'Form must reject overlap on VOTED end_at edit')
+        self.assertIn('start_at', form.errors)
+        self.assertIn('end_at', form.errors)
+        # Lock was acquired for the overlap check (X5: now fires regardless of status).
+        mock_lock.assert_called_once_with()
+
+    @patch('aqua_governance.governance.forms.acquire_proposal_transition_lock')
+    def test_manager_can_edit_voted_asset_proposal_end_at_to_non_overlapping_window(self, mock_lock):
+        """X5 follow-up: legitimate edits to VOTED asset proposal end_at must still pass.
+
+        Manager moves end_at to a window that does NOT overlap any active
+        VOTING proposal — overlap check runs (lock acquired) but the form is
+        valid. Confirms the X5 fix didn't break legitimate VOTED edits.
+        """
+        now = timezone.now()
+
+        voted = self._make_proposal(Proposal.PROPOSAL_TYPE_ADD_ASSET)
+        voted.proposal_status = Proposal.VOTED
+        voted.start_at = now - timedelta(days=30)
+        voted.end_at = now - timedelta(days=20)
+        voted.title = 'Finished VOTED'
+        voted.save(update_fields=['proposal_status', 'start_at', 'end_at', 'title'])
+
+        request = self.factory.post('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        # Move end_at slightly further into the past — no overlap with any
+        # active VOTING (there isn't one). VOTED row staying VOTED.
+        new_end = now - timedelta(days=15)
+        form_class = self.admin.get_form(request, obj=voted, change=True)
+        form = form_class(
+            instance=voted,
+            data={
+                'proposed_by': voted.proposed_by,
+                'title': voted.title,
+                'text': self._quill_form_value(),
+                'proposal_type': Proposal.PROPOSAL_TYPE_ADD_ASSET,
+                'proposal_status': Proposal.VOTED,
+                'start_at_0': self._split_datetime_form_value(voted.start_at)['date'],
+                'start_at_1': self._split_datetime_form_value(voted.start_at)['time'],
+                'end_at_0': self._split_datetime_form_value(new_end)['date'],
+                'end_at_1': self._split_datetime_form_value(new_end)['time'],
+                'discord_username': 'manager',
+                'asset_issuer_information': 'info',
+                'asset_token_description': 'desc',
+                'asset_holder_distribution': 'distribution',
+                'asset_liquidity': 'liquidity',
+                'asset_trading_volume': 'volume',
+                'asset_audit_info': 'audit',
+                'asset_stellar_flags': 'flags',
+                'asset_related_projects': 'projects',
+                'asset_community_references': 'references',
+                'asset_aquarius_traction': 'traction',
+                'asset_issuer_commitments': 'commitments',
+            },
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        # X5 still acquires the lock to run the overlap check even though the
+        # final answer is "no conflict" — this is the new defense.
+        mock_lock.assert_called_once_with()
+
+    def test_manager_can_edit_manual_asset_admin_fields(self):
+        asset_proposal = self._make_proposal(Proposal.PROPOSAL_TYPE_ADD_ASSET)
+
+        request = self.factory.get('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        readonly_fields = self.admin.get_readonly_fields(request, asset_proposal)
+
+        self.assertNotIn('start_at', readonly_fields)
+        self.assertNotIn('end_at', readonly_fields)
+        self.assertNotIn('proposal_status', readonly_fields)
+        self.assertNotIn('asset_issuer_information', readonly_fields)
+        self.assertIn('onchain_execution_status', readonly_fields)
+
+        form_class = self.admin.get_form(request, obj=asset_proposal, change=True)
+        form = form_class(instance=asset_proposal)
+
+        self.assertIn('asset_code', readonly_fields)
+        self.assertIn('asset_issuer', readonly_fields)
+        self.assertIn('asset_contract_address', readonly_fields)
+        self.assertNotIn('asset_code', form.fields)
+        self.assertNotIn('asset_issuer', form.fields)
+        self.assertNotIn('asset_contract_address', form.fields)
+        self.assertIn('asset_issuer_information', form.fields)
+        self.assertFalse(form.fields['asset_issuer_information'].disabled)
+
+    def test_manager_can_set_status_when_adding_asset_proposal(self):
+        request = self.factory.get('/admin/')
+        request.user = self._create_user(with_manage_perm=True)
+
+        readonly_fields = self.admin.get_readonly_fields(request)
+
+        self.assertNotIn('proposal_status', readonly_fields)
+
+    def test_asset_payload_fieldset_is_hidden_for_existing_general_proposal(self):
+        general_proposal = self._make_proposal(Proposal.PROPOSAL_TYPE_GENERAL)
+
+        request = self.factory.get('/admin/')
+        request.user = self._create_user(is_superuser=True)
+
+        fieldset_names = [name for name, _ in self.admin.get_fieldsets(request, general_proposal)]
+
+        self.assertNotIn('Asset payload', fieldset_names)
+        self.assertNotIn('Onchain execution', fieldset_names)
+
+    def test_admin_uses_default_single_fieldset_for_asset_proposal_and_add_form(self):
+        asset_proposal = self._make_proposal(Proposal.PROPOSAL_TYPE_ADD_ASSET)
+
+        request = self.factory.get('/admin/')
+        request.user = self._create_user(is_superuser=True)
+
+        asset_fieldset_names = [name for name, _ in self.admin.get_fieldsets(request, asset_proposal)]
+        add_fieldset_names = [name for name, _ in self.admin.get_fieldsets(request)]
+
+        self.assertEqual(asset_fieldset_names, [None])
+        self.assertEqual(add_fieldset_names, [None])
+
+    def test_add_form_exposes_asset_fields_without_custom_section_media_hook(self):
+        request = self.factory.get('/admin/')
+        request.user = self._create_user(is_superuser=True)
+
+        form_class = self.admin.get_form(request)
+        form = form_class()
+        media = str(self.admin.media)
+
+        self.assertIn('asset_code', form.fields)
+        self.assertIn('asset_issuer', form.fields)
+        self.assertIn('asset_contract_address', form.fields)
+        self.assertNotIn('admin/proposal_asset_sections.js', media)
+
+    def test_superuser_keeps_full_access(self):
+        request = self.factory.get('/admin/')
+        request.user = self._create_user(is_superuser=True)
+
+        self.assertTrue(self.admin.has_add_permission(request))
+        self.assertTrue(self.admin.has_change_permission(request))
+        self.assertTrue(self.admin.has_view_permission(request))
