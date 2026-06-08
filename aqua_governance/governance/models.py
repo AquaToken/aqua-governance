@@ -102,12 +102,14 @@ class Proposal(AssetProposalInfo):
     )  # TODO: remove it
 
     DISCUSSION = 'DISCUSSION'
+    QUEUED = 'QUEUED'
     VOTING = 'VOTING'
     VOTED = 'VOTED'
     EXPIRED = 'EXPIRED'
 
     NEW_PROPOSAL_STATUS_CHOICES = (
         (DISCUSSION, 'Proposal under discussion'),
+        (QUEUED, 'Proposal queued for voting'),
         (VOTING, 'Proposal under voting'),
         (VOTED, 'Voted'),
         (EXPIRED, 'Expired'),
@@ -373,7 +375,7 @@ class Proposal(AssetProposalInfo):
         )
 
     def check_transaction(self):
-        check_proposal_transaction(self)
+        return check_proposal_transaction(self)
 
     def clean(self):
         super().clean()
@@ -454,6 +456,24 @@ class Proposal(AssetProposalInfo):
         permissions = [
             ('manage_asset_proposals', 'Can manage asset proposals in admin'),
         ]
+
+
+class ProposalQueueSlot(models.Model):
+    proposal = models.OneToOneField(
+        Proposal,
+        on_delete=models.CASCADE,
+        related_name='queue_slot',
+    )
+    start_at = models.DateTimeField(unique=True)
+    end_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['start_at', 'id']
+
+    def __str__(self):
+        return f'{self.proposal_id}: {self.start_at.isoformat()} -> {self.end_at.isoformat()}'
 
 
 class LogVote(models.Model):

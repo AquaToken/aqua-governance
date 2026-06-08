@@ -40,7 +40,7 @@ def setup_periodic_tasks(sender, **kwargs):
             },
             "aqua_governance.governance.tasks.task_check_pending_proposal_payments": {
                 "task": "aqua_governance.governance.tasks.task_check_pending_proposal_payments",
-                "schedule": crontab(minute="*/10"),
+                "schedule": crontab(minute="*/1"),
                 "args": (),
             },
             "aqua_governance.governance.tasks.task_update_votes": {
