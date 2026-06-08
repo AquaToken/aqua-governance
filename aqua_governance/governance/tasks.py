@@ -442,9 +442,12 @@ def task_retry_failed_onchain_executions():
     ).order_by('-id')
 
     for proposal in proposals:
-        # Retry through the final-results pipeline so votes are recomputed/frozen
-        # before any DB whitelist changes or onchain execution decisions happen.
-        task_update_proposal_results(proposal.id, True)
+        # Recompute final results from already-frozen data and re-attempt
+        # onchain execution.  Do NOT call task_update_proposal_results()
+        # (which would re-index/re-freeze claimable balances) because the
+        # proposal is already VOTED and its voted_amount snapshots must
+        # not be overwritten by current (possibly melted/claimed) balances.
+        update_proposal_final_results(proposal.id)
 
 
 @celery_app.task(ignore_result=True)
