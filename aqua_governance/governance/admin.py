@@ -10,7 +10,7 @@ from aqua_governance.governance.asset_tokens import (
     upsert_asset_token_from_proposal,
 )
 from aqua_governance.governance.forms import ProposalAdminForm
-from aqua_governance.governance.models import AssetToken, LogVote, Proposal
+from aqua_governance.governance.models import AssetToken, LogVote, Proposal, ProposalQueueSlot
 
 
 @admin.register(Proposal)
@@ -350,3 +350,44 @@ class AssetTokenAdmin(admin.ModelAdmin):
         return getattr(obj, 'proposal_count', obj.proposals.count())
 
     _proposal_count.short_description = 'Proposals'
+
+
+@admin.register(ProposalQueueSlot)
+class ProposalQueueSlotAdmin(admin.ModelAdmin):
+    list_display = [
+        'id',
+        'proposal_id',
+        'start_at',
+        'end_at',
+        'created_at',
+        'updated_at',
+    ]
+    readonly_fields = [
+        'id',
+        'proposal',
+        'start_at',
+        'end_at',
+        'created_at',
+        'updated_at',
+    ]
+    fields = readonly_fields
+    search_fields = [
+        '=proposal__id',
+        '=id',
+    ]
+    list_filter = [
+        ('start_at', admin.DateFieldListFilter),
+        ('end_at', admin.DateFieldListFilter),
+        ('created_at', admin.DateFieldListFilter),
+    ]
+    ordering = ['start_at', 'id']
+    list_select_related = ('proposal',)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
