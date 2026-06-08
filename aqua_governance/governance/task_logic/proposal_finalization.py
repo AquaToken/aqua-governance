@@ -13,33 +13,49 @@ from aqua_governance.governance.models import LogVote, Proposal
 logger = logging.getLogger()
 
 
+def _sum_votes_for_proposal(proposal: Proposal, vote_choice: str) -> Decimal:
+    """Sum LogVote amounts for *proposal* and *vote_choice*, respecting status.
+
+    For ``Proposal.VOTED`` proposals the frozen ``voted_amount`` is used and
+    votes that have already been *claimed* are still counted (the snapshot was
+    taken at the moment voting ended, before claims).  For every other status
+    the current ``amount`` is used and *claimed* rows are excluded.
+
+    For VOTED proposals, ``voted_amount`` is preferred.  When ``voted_amount``
+    is ``None`` (which happens for rows that were first indexed after the
+    voting window closed, e.g. during a periodic reindex without freezing),
+    the current ``amount`` is used as a fallback.  This covers legacy /
+    late-discovered rows that missed the freeze.  Non-freezing updates to rows
+    that already have a snapshot preserve the existing ``voted_amount``.
+    """
+    supported_vote_assets = [settings.GOVERNANCE_ICE_ASSET_CODE, settings.GDICE_ASSET_CODE]
+
+    if proposal.proposal_status == Proposal.VOTED:
+        rows = proposal.logvote_set.filter(
+            vote_choice=vote_choice,
+            hide=False,
+            asset_code__in=supported_vote_assets,
+        ).values_list('voted_amount', 'amount')
+        total = sum(
+            (voted_amount if voted_amount is not None else amount)
+            for voted_amount, amount in rows
+        )
+        return _as_decimal(total)
+
+    amounts = proposal.logvote_set.filter(
+        vote_choice=vote_choice,
+        hide=False,
+        claimed=False,
+        asset_code__in=supported_vote_assets,
+    ).values_list('amount', flat=True)
+    return _as_decimal(sum(amounts))
+
+
 def update_proposal_final_results(proposal_id: int) -> None:
     proposal = Proposal.objects.get(id=proposal_id)
-    supported_vote_assets = [settings.GOVERNANCE_ICE_ASSET_CODE, settings.GDICE_ASSET_CODE]
-    vote_for_result = sum(
-        proposal.logvote_set.filter(
-            vote_choice=LogVote.VOTE_FOR,
-            hide=False,
-            claimed=False,
-            asset_code__in=supported_vote_assets,
-        ).values_list('amount', flat=True),
-    )
-    vote_against_result = sum(
-        proposal.logvote_set.filter(
-            vote_choice=LogVote.VOTE_AGAINST,
-            hide=False,
-            claimed=False,
-            asset_code__in=supported_vote_assets,
-        ).values_list('amount', flat=True),
-    )
-    vote_abstain_result = sum(
-        proposal.logvote_set.filter(
-            vote_choice=LogVote.VOTE_ABSTAIN,
-            hide=False,
-            claimed=False,
-            asset_code__in=supported_vote_assets,
-        ).values_list('amount', flat=True),
-    )
+    vote_for_result = _sum_votes_for_proposal(proposal, LogVote.VOTE_FOR)
+    vote_against_result = _sum_votes_for_proposal(proposal, LogVote.VOTE_AGAINST)
+    vote_abstain_result = _sum_votes_for_proposal(proposal, LogVote.VOTE_ABSTAIN)
     proposal.vote_for_result = vote_for_result
     proposal.vote_against_result = vote_against_result
     proposal.vote_abstain_result = vote_abstain_result
