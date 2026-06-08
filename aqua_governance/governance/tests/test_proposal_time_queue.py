@@ -1,15 +1,12 @@
-import json
 from datetime import timedelta
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-from django.conf import settings
 from django.test import TestCase, override_settings
 from django.utils import timezone
-from django_quill.quill import Quill
 
 from aqua_governance.governance.models import Proposal, ProposalQueueSlot
 from aqua_governance.governance.proposal_queue import get_queue_week_start
-from aqua_governance.governance.serializers_v2 import SubmitSerializer
+from aqua_governance.governance.serializers_v2 import AssetProposalCreateSerializer, SubmitSerializer
 from aqua_governance.governance.tasks import (
     task_check_expired_proposals,
     task_sync_proposal_statuses_by_time,
@@ -44,75 +41,6 @@ class ProposalTimeQueueTests(TestCase):
         }
         kwargs.update(overrides)
         return make_asset_proposal_raw(**kwargs)
-
-    def test_voting_interval_allows_adjacent_asset_windows(self):
-        start_at = timezone.now() + timedelta(days=1)
-        end_at = start_at + timedelta(days=7)
-        self._create_proposal(start_at=start_at, end_at=end_at)
-
-        self.assertFalse(
-            Proposal.has_voting_interval_conflict(
-                start_at=end_at,
-                end_at=end_at + timedelta(days=7),
-            ),
-        )
-
-    def test_voting_interval_rejects_asset_overlap(self):
-        start_at = timezone.now() + timedelta(days=1)
-        end_at = start_at + timedelta(days=7)
-        self._create_proposal(start_at=start_at, end_at=end_at)
-
-        self.assertTrue(
-            Proposal.has_voting_interval_conflict(
-                start_at=end_at - timedelta(minutes=1),
-                end_at=end_at + timedelta(days=7),
-            ),
-        )
-
-    def test_voting_interval_rejects_overlap_between_any_proposal_types(self):
-        start_at = timezone.now() + timedelta(days=1)
-        end_at = start_at + timedelta(days=7)
-        self._create_proposal(
-            proposal_type=Proposal.PROPOSAL_TYPE_GENERAL,
-            start_at=start_at,
-            end_at=end_at,
-        )
-
-        self.assertTrue(
-            Proposal.has_voting_interval_conflict(
-                start_at=end_at - timedelta(minutes=1),
-                end_at=end_at + timedelta(days=7),
-            ),
-        )
-
-    def test_voting_interval_allows_adjacent_windows(self):
-        start_at = timezone.now() + timedelta(days=1)
-        end_at = start_at + timedelta(days=7)
-        self._create_proposal(
-            proposal_type=Proposal.PROPOSAL_TYPE_GENERAL,
-            start_at=start_at,
-            end_at=end_at,
-        )
-
-        self.assertFalse(
-            Proposal.has_voting_interval_conflict(
-                start_at=end_at,
-                end_at=end_at + timedelta(days=7),
-            ),
-        )
-
-    def test_voting_interval_ignores_voted_and_expired(self):
-        start_at = timezone.now() - timedelta(days=8)
-        end_at = timezone.now() - timedelta(days=1)
-        self._create_proposal(start_at=start_at, end_at=end_at, proposal_status=Proposal.VOTED)
-        self._create_proposal(start_at=start_at, end_at=end_at, proposal_status=Proposal.EXPIRED)
-
-        self.assertFalse(
-            Proposal.has_voting_interval_conflict(
-                start_at=start_at + timedelta(days=1),
-                end_at=end_at + timedelta(days=1),
-            ),
-        )
 
     @override_settings(ASSET_MIN_VOTING_DURATION_DAYS=7)
     def test_submit_serializer_rejects_asset_interval_overlap(self):
@@ -279,10 +207,7 @@ class ProposalTimeQueueTests(TestCase):
         self.assertEqual(proposal.new_transaction_hash, 'a' * 64)
 
     @patch('aqua_governance.governance.proposal_transactions.check_proposal_status', return_value=Proposal.FINE)
-    def test_check_transaction_books_future_slot_as_queued(
-        self,
-        _mock_check_status,
-    ):
+    def test_check_transaction_books_future_slot_as_queued(self, _mock_check_status):
         start_at, end_at = self._queue_slot(weeks_ahead=1)
         proposal = self._create_proposal(
             proposal_type=Proposal.PROPOSAL_TYPE_GENERAL,
@@ -315,7 +240,6 @@ class ProposalTimeQueueTests(TestCase):
             proposal_type=Proposal.PROPOSAL_TYPE_GENERAL,
             transaction_hash='d' * 64,
         )
-        now = timezone.now()
 
         serializer = SubmitSerializer(
             proposal,
@@ -379,51 +303,18 @@ class ProposalTimeQueueTests(TestCase):
         mock_update_results.assert_not_called()
 
     @patch('aqua_governance.governance.tasks.task_update_proposal_results.delay')
-    def test_sync_task_starts_earliest_due_discussion_when_legacy_windows_overlap(self, mock_update_results):
-        now = timezone.now()
-        first = self._create_proposal(
+    def test_sync_task_does_not_start_due_discussion_proposal_without_queue_slot(self, mock_update_results):
+        proposal = self._create_proposal(
             proposal_type=Proposal.PROPOSAL_TYPE_GENERAL,
-            start_at=now - timedelta(minutes=2),
-            end_at=now + timedelta(days=1),
-        )
-        second = self._create_proposal(
-            proposal_type=Proposal.PROPOSAL_TYPE_GENERAL,
-            transaction_hash='b' * 64,
-            start_at=now - timedelta(minutes=1),
-            end_at=now + timedelta(days=1),
-        )
-
-        task_sync_proposal_statuses_by_time()
-
-        first.refresh_from_db()
-        second.refresh_from_db()
-        self.assertEqual(first.proposal_status, Proposal.VOTING)
-        self.assertEqual(second.proposal_status, Proposal.DISCUSSION)
-        mock_update_results.assert_not_called()
-
-    @patch('aqua_governance.governance.tasks.task_update_proposal_results.delay')
-    def test_sync_task_starts_due_discussion_proposal_when_pending_window_overlaps(self, mock_update_results):
-        now = timezone.now()
-        self._create_proposal(
-            proposal_type=Proposal.PROPOSAL_TYPE_GENERAL,
-            action=Proposal.TO_SUBMIT,
             proposal_status=Proposal.DISCUSSION,
-            payment_status=Proposal.FINE,
-            new_start_at=now - timedelta(days=1),
-            new_end_at=now + timedelta(days=1),
-            new_envelope_xdr='blocker-xdr',
-            new_transaction_hash='f' * 64,
-        )
-        queued = self._create_proposal(
-            start_at=now - timedelta(minutes=1),
-            end_at=now + timedelta(days=1),
-            asset_contract_address='CBQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC',
+            start_at=timezone.now() - timedelta(minutes=1),
+            end_at=timezone.now() + timedelta(days=1),
         )
 
         task_sync_proposal_statuses_by_time()
 
-        queued.refresh_from_db()
-        self.assertEqual(queued.proposal_status, Proposal.VOTING)
+        proposal.refresh_from_db()
+        self.assertEqual(proposal.proposal_status, Proposal.DISCUSSION)
         mock_update_results.assert_not_called()
 
     @patch('aqua_governance.governance.tasks.task_update_proposal_results.delay')
@@ -484,8 +375,9 @@ class ProposalTimeQueueTests(TestCase):
         proposal.refresh_from_db()
         self.assertEqual(proposal.proposal_status, Proposal.QUEUED)
 
-    def test_expiration_task_does_not_expire_future_scheduled_proposal(self):
+    def test_expiration_task_expires_stale_slotless_discussion_with_legacy_window(self):
         proposal = self._create_proposal(
+            proposal_type=Proposal.PROPOSAL_TYPE_GENERAL,
             start_at=timezone.now() + timedelta(days=1),
             end_at=timezone.now() + timedelta(days=8),
         )
@@ -496,7 +388,7 @@ class ProposalTimeQueueTests(TestCase):
         task_check_expired_proposals()
 
         proposal.refresh_from_db()
-        self.assertEqual(proposal.proposal_status, Proposal.DISCUSSION)
+        self.assertEqual(proposal.proposal_status, Proposal.EXPIRED)
 
     @patch('aqua_governance.governance.tasks.task_update_proposal_results.delay')
     def test_sync_task_ignores_legacy_voting_proposal_without_end_at(self, mock_update_results):
@@ -520,15 +412,17 @@ class ProposalTimeQueueTests(TestCase):
             end_at=None,
         )
         queued = self._create_proposal(
+            proposal_status=Proposal.QUEUED,
             transaction_hash='c' * 64,
             start_at=timezone.now() - timedelta(minutes=1),
             end_at=timezone.now() + timedelta(days=7),
         )
+        self._attach_queue_slot(queued, start_at=queued.start_at, end_at=queued.end_at)
 
         task_sync_proposal_statuses_by_time()
 
         queued.refresh_from_db()
-        self.assertEqual(queued.proposal_status, Proposal.DISCUSSION)
+        self.assertEqual(queued.proposal_status, Proposal.QUEUED)
         mock_update_results.assert_not_called()
 
     @patch('aqua_governance.governance.tasks.task_update_proposal_results.delay')
@@ -566,161 +460,8 @@ class ProposalTimeQueueTests(TestCase):
         self.assertEqual(proposal.action, Proposal.NONE)
 
 
-class ComputeAssetQueueWindowTests(TestCase):
-    """Tests for Proposal.compute_asset_queue_window()."""
-
-    def test_returns_now_when_no_existing_proposal(self):
-        before = timezone.now()
-        start_at, end_at = Proposal.compute_asset_queue_window()
-        after = timezone.now()
-
-        self.assertGreaterEqual(start_at, before - timedelta(seconds=1))
-        self.assertLessEqual(start_at, after + timedelta(seconds=1))
-        duration = (end_at - start_at).days
-        self.assertGreaterEqual(duration, settings.ASSET_MIN_VOTING_DURATION_DAYS)
-
-    def test_returns_now_when_last_proposal_ended_in_past(self):
-        now = timezone.now()
-        make_asset_proposal_raw(
-            start_at=now - timedelta(days=10),
-            end_at=now - timedelta(days=3),
-            proposal_status=Proposal.VOTED,
-        )
-
-        before = timezone.now()
-        start_at, end_at = Proposal.compute_asset_queue_window()
-        after = timezone.now()
-
-        self.assertGreaterEqual(start_at, before - timedelta(seconds=1))
-        self.assertLessEqual(start_at, after + timedelta(seconds=1))
-
-    def test_queues_after_latest_future_proposal(self):
-        now = timezone.now()
-        future_end = now + timedelta(days=5)
-        make_asset_proposal_raw(
-            start_at=now,
-            end_at=future_end,
-            proposal_status=Proposal.DISCUSSION,
-        )
-
-        start_at, end_at = Proposal.compute_asset_queue_window()
-
-        expected_start = future_end + timedelta(seconds=settings.ASSET_QUEUE_GAP_SECONDS)
-        self.assertEqual(start_at, expected_start)
-        expected_end = expected_start + timedelta(days=settings.ASSET_MIN_VOTING_DURATION_DAYS)
-        self.assertEqual(end_at, expected_end)
-
-    def test_queues_after_latest_when_multiple_future_proposals(self):
-        now = timezone.now()
-        first_end = now + timedelta(days=3)
-        second_end = now + timedelta(days=10)
-        make_asset_proposal_raw(
-            start_at=now,
-            end_at=first_end,
-            proposal_status=Proposal.DISCUSSION,
-            asset_contract_address='CBQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1',
-        )
-        make_asset_proposal_raw(
-            start_at=first_end + timedelta(seconds=1),
-            end_at=second_end,
-            proposal_status=Proposal.VOTING,
-            asset_contract_address='CBQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2',
-        )
-
-        start_at, end_at = Proposal.compute_asset_queue_window()
-
-        expected_start = second_end + timedelta(seconds=settings.ASSET_QUEUE_GAP_SECONDS)
-        self.assertEqual(start_at, expected_start)
-        expected_end = expected_start + timedelta(days=settings.ASSET_MIN_VOTING_DURATION_DAYS)
-        self.assertEqual(end_at, expected_end)
-
-    def test_ignores_hidden_proposals(self):
-        """Hidden proposals must not block the queue, even with future end_at."""
-        now = timezone.now()
-        hidden_end = now + timedelta(days=100)
-        make_asset_proposal_raw(
-            start_at=now,
-            end_at=hidden_end,
-            proposal_status=Proposal.DISCUSSION,
-            hide=True,
-        )
-
-        before = timezone.now()
-        start_at, end_at = Proposal.compute_asset_queue_window()
-        after = timezone.now()
-
-        self.assertGreaterEqual(start_at, before - timedelta(seconds=1))
-        self.assertLessEqual(start_at, after + timedelta(seconds=1))
-
-    def test_draft_asset_proposal_blocks_queue(self):
-        """A draft=pending asset proposal with future end_at must block the queue.
-
-        API-created asset proposals start as draft=True and receive start/end
-        windows.  Subsequent creations must queue after them to avoid overlap.
-        """
-        now = timezone.now()
-        future_end = now + timedelta(days=5)
-        make_asset_proposal_raw(
-            start_at=now,
-            end_at=future_end,
-            proposal_status=Proposal.DISCUSSION,
-            draft=True,
-        )
-
-        start_at, end_at = Proposal.compute_asset_queue_window()
-        expected_start = future_end + timedelta(seconds=settings.ASSET_QUEUE_GAP_SECONDS)
-        self.assertEqual(start_at, expected_start)
-
-    def test_draft_general_proposal_with_end_at_is_ignored(self):
-        """Defense-in-depth: a draft GENERAL proposal with end_at is excluded.
-
-        GENERAL proposals do not normally receive start/end windows during
-        creation, but even if synthetic test data supplies them, the queue
-        filter only includes draft proposals when they are asset types.
-        """
-        now = timezone.now()
-        general_end = now + timedelta(days=100)
-        make_asset_proposal_raw(
-            start_at=now,
-            end_at=general_end,
-            proposal_status=Proposal.DISCUSSION,
-            proposal_type=Proposal.PROPOSAL_TYPE_GENERAL,
-            draft=True,
-        )
-
-        before = timezone.now()
-        start_at, _ = Proposal.compute_asset_queue_window()
-        after = timezone.now()
-
-        self.assertGreaterEqual(start_at, before - timedelta(seconds=1))
-        self.assertLessEqual(start_at, after + timedelta(seconds=1))
-
-    def test_ignores_voted_and_expired_proposals(self):
-        now = timezone.now()
-        make_asset_proposal_raw(
-            start_at=now - timedelta(days=10),
-            end_at=now + timedelta(days=3),
-            proposal_status=Proposal.VOTED,
-        )
-        make_asset_proposal_raw(
-            start_at=now - timedelta(days=10),
-            end_at=now + timedelta(days=5),
-            proposal_status=Proposal.EXPIRED,
-            asset_contract_address='CBQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA1',
-        )
-
-        before = timezone.now()
-        start_at, end_at = Proposal.compute_asset_queue_window()
-        after = timezone.now()
-
-        self.assertGreaterEqual(start_at, before - timedelta(seconds=1))
-        self.assertLessEqual(start_at, after + timedelta(seconds=1))
-
-
 @patch('aqua_governance.governance.serializers_v2.check_transaction_xdr', return_value=Proposal.HORIZON_ERROR)
-class AssetProposalCreateQueueWindowTests(TestCase):
-    """Tests that AssetProposalCreateSerializer sets start_at/end_at from the queue."""
-
+class AssetProposalCreateWithoutQueueBookingTests(TestCase):
     def setUp(self):
         super().setUp()
         self.ice_supply_patcher = patch_ice_circulating_supply()
@@ -754,73 +495,37 @@ class AssetProposalCreateQueueWindowTests(TestCase):
         return data
 
     @patch('aqua_governance.governance.serializers_v2.validate_asset_payload', return_value=['CBMOCK'])
-    def test_create_sets_now_window_when_no_existing_proposal(self, _mock_validate, _mock_check):
-        from aqua_governance.governance.serializers_v2 import AssetProposalCreateSerializer
-
-        before = timezone.now()
+    def test_create_leaves_start_and_end_empty_and_unbooked(self, _mock_validate, _mock_check):
         serializer = AssetProposalCreateSerializer(data=self._asset_payload())
         self.assertTrue(serializer.is_valid(), serializer.errors)
         proposal = serializer.save()
-        after = timezone.now()
 
-        self.assertIsNotNone(proposal.start_at)
-        self.assertIsNotNone(proposal.end_at)
-        self.assertGreaterEqual(proposal.start_at, before - timedelta(seconds=1))
-        self.assertLessEqual(proposal.start_at, after + timedelta(seconds=1))
-        duration = (proposal.end_at - proposal.start_at).days
-        self.assertGreaterEqual(duration, settings.ASSET_MIN_VOTING_DURATION_DAYS)
+        self.assertIsNone(proposal.start_at)
+        self.assertIsNone(proposal.end_at)
+        self.assertFalse(ProposalQueueSlot.objects.filter(proposal=proposal).exists())
 
     @patch('aqua_governance.governance.serializers_v2.validate_asset_payload', return_value=['CBMOCK'])
-    def test_create_queues_after_existing_future_proposal(self, _mock_validate, _mock_check):
-        from aqua_governance.governance.serializers_v2 import AssetProposalCreateSerializer
-
-        now = timezone.now()
-        future_end = now + timedelta(days=5)
-        existing = make_asset_proposal_raw(
-            start_at=now,
-            end_at=future_end,
-            proposal_status=Proposal.DISCUSSION,
-        )
-
-        serializer = AssetProposalCreateSerializer(data=self._asset_payload(
-            transaction_hash='d' * 64,
-        ))
-        self.assertTrue(serializer.is_valid(), serializer.errors)
-        proposal = serializer.save()
-
-        expected_start = future_end + timedelta(seconds=settings.ASSET_QUEUE_GAP_SECONDS)
-        self.assertEqual(proposal.start_at, expected_start)
-        expected_end = expected_start + timedelta(days=settings.ASSET_MIN_VOTING_DURATION_DAYS)
-        self.assertEqual(proposal.end_at, expected_end)
-
-    @patch('aqua_governance.governance.serializers_v2.validate_asset_payload', return_value=['CBMOCK'])
-    def test_create_sets_start_at_and_end_at_read_only_in_response(self, _mock_validate, _mock_check):
-        from aqua_governance.governance.serializers_v2 import AssetProposalCreateSerializer
-
+    def test_create_keeps_start_and_end_fields_in_response_as_null(self, _mock_validate, _mock_check):
         serializer = AssetProposalCreateSerializer(data=self._asset_payload())
         self.assertTrue(serializer.is_valid(), serializer.errors)
-        proposal = serializer.save()
+        serializer.save()
 
         self.assertIn('start_at', serializer.data)
         self.assertIn('end_at', serializer.data)
-        self.assertIsNotNone(serializer.data['start_at'])
-        self.assertIsNotNone(serializer.data['end_at'])
+        self.assertIsNone(serializer.data['start_at'])
+        self.assertIsNone(serializer.data['end_at'])
 
     @patch('aqua_governance.governance.serializers_v2.validate_asset_payload', return_value=['CBMOCK'])
-    def test_create_acquires_lock(self, _mock_validate, mock_check):
-        from aqua_governance.governance.serializers_v2 import AssetProposalCreateSerializer
-
+    def test_create_does_not_acquire_transition_lock(self, _mock_validate, mock_check):
         with patch('aqua_governance.governance.serializers_v2.acquire_proposal_transition_lock') as mock_lock:
             serializer = AssetProposalCreateSerializer(data=self._asset_payload())
             self.assertTrue(serializer.is_valid(), serializer.errors)
             serializer.save()
 
-            mock_lock.assert_called_once_with()
+            mock_lock.assert_not_called()
 
     @patch('aqua_governance.governance.serializers_v2.validate_asset_payload', return_value=['CBMOCK'])
     def test_create_keeps_draft_true(self, _mock_validate, _mock_check):
-        from aqua_governance.governance.serializers_v2 import AssetProposalCreateSerializer
-
         serializer = AssetProposalCreateSerializer(data=self._asset_payload())
         self.assertTrue(serializer.is_valid(), serializer.errors)
         proposal = serializer.save()

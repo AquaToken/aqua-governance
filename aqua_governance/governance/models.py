@@ -1,11 +1,7 @@
-from datetime import timedelta
-
 import requests
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import Q
-from django.utils import timezone
 
 from aqua_governance.governance.onchain_actions import derive_proposal_onchain_action_args
 from aqua_governance.governance import payment_statuses
@@ -265,93 +261,6 @@ class Proposal(AssetProposalInfo):
         if current_proposal_id is not None:
             queryset = queryset.exclude(id=current_proposal_id)
         return queryset.exists()
-
-    @classmethod
-    def _has_voting_window_conflict(cls, start_at, end_at, current_proposal_id=None, proposal_type_filter=None) -> bool:
-        if not start_at or not end_at:
-            return False
-
-        queryset = cls.objects.filter(hide=False, draft=False)
-        if proposal_type_filter is not None:
-            queryset = queryset.filter(proposal_type__in=proposal_type_filter)
-        if current_proposal_id is not None:
-            queryset = queryset.exclude(id=current_proposal_id)
-        return queryset.filter(
-            Q(
-                proposal_status__in=(cls.DISCUSSION, cls.VOTING),
-                start_at__isnull=False,
-                end_at__isnull=False,
-                start_at__lt=end_at,
-                end_at__gt=start_at,
-            )
-            | Q(
-                proposal_status__in=(cls.DISCUSSION, cls.VOTING),
-                action=cls.TO_SUBMIT,
-                payment_status=cls.FINE,
-                new_start_at__isnull=False,
-                new_end_at__isnull=False,
-                new_start_at__lt=end_at,
-                new_end_at__gt=start_at,
-            )
-        ).exists()
-
-    @classmethod
-    def has_voting_interval_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
-        return cls._has_voting_window_conflict(
-            start_at=start_at,
-            end_at=end_at,
-            current_proposal_id=current_proposal_id,
-        )
-
-    @classmethod
-    def compute_asset_queue_window(cls):
-        """Return (start_at, end_at) for a new asset proposal based on queue position.
-
-        start_at is set immediately after the latest non-hidden DISCUSSION/VOTING
-        proposal whose end_at lies in the future, plus
-        ``settings.ASSET_QUEUE_GAP_SECONDS``.  Draft asset proposals (which already
-        have start/end windows and can later become visible) are included; draft
-        GENERAL proposals are excluded.  If no such proposal exists, start_at
-        defaults to ``timezone.now()``.
-        end_at = start_at + ``settings.ASSET_MIN_VOTING_DURATION_DAYS`` days.
-        """
-        last = (
-            cls.objects
-            .filter(
-                hide=False,
-                proposal_status__in=(cls.DISCUSSION, cls.VOTING),
-                end_at__isnull=False,
-            )
-            .filter(
-                Q(draft=False) | Q(proposal_type__in=cls.ASSET_PROPOSAL_TYPES),
-            )
-            .order_by('-end_at')
-            .first()
-        )
-        now = timezone.now()
-        if last and last.end_at > now:
-            start_at = last.end_at + timedelta(seconds=settings.ASSET_QUEUE_GAP_SECONDS)
-        else:
-            start_at = now
-        end_at = start_at + timedelta(days=settings.ASSET_MIN_VOTING_DURATION_DAYS)
-        return start_at, end_at
-
-    @classmethod
-    def has_blocking_voting_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
-        return (
-            cls.has_active_voting_proposal_conflict(current_proposal_id=current_proposal_id)
-            or cls.has_voting_interval_conflict(
-                start_at=start_at,
-                end_at=end_at,
-                current_proposal_id=current_proposal_id,
-            )
-        )
-
-    @classmethod
-    def has_voting_activation_conflict(cls, start_at, end_at, current_proposal_id=None) -> bool:
-        return cls.has_active_voting_proposal_conflict(
-            current_proposal_id=current_proposal_id,
-        )
 
     @property
     def onchain_action_type(self) -> str:

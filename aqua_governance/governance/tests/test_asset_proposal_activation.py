@@ -134,6 +134,10 @@ class AssetProposalActivationTests(TestCase):
             'aqua_governance.governance.tasks.task_check_pending_proposal_payments',
             celery_app.conf.beat_schedule,
         )
+        self.assertNotIn(
+            'aqua_governance.governance.tasks.check_proposals_with_bad_horizon_error',
+            celery_app.conf.beat_schedule,
+        )
 
     @patch('aqua_governance.governance.proposal_transactions.check_proposal_status', return_value=Proposal.FINE)
     def test_queued_asset_proposal_refreshes_last_updated_at_on_activation(self, _mock_check_status):

@@ -425,10 +425,6 @@ class AssetProposalCreateSerializer(serializers.ModelSerializer):
         validated_data["payment_status"] = status
 
         with transaction.atomic():
-            acquire_proposal_transition_lock()
-            start_at, end_at = Proposal.compute_asset_queue_window()
-            validated_data["start_at"] = start_at
-            validated_data["end_at"] = end_at
             proposal = super().create(validated_data)
             upsert_asset_token_from_proposal(proposal, save=True)
 

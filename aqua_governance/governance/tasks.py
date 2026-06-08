@@ -4,7 +4,6 @@ from typing import Optional
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 from stellar_sdk import Server
 from stellar_sdk.soroban_rpc import GetTransactionStatus
@@ -33,18 +32,14 @@ def _start_due_scheduled_proposals(now) -> int:
                 hide=False,
                 draft=False,
                 action=Proposal.NONE,
-                proposal_status__in=(Proposal.DISCUSSION, Proposal.QUEUED),
+                proposal_status=Proposal.QUEUED,
                 start_at__lte=now,
                 end_at__gt=now,
             ).order_by('start_at', 'id'),
         )
         for proposal in proposals:
             locked_proposal = Proposal.objects.select_for_update().get(id=proposal.id)
-            if Proposal.has_voting_activation_conflict(
-                start_at=locked_proposal.start_at,
-                end_at=locked_proposal.end_at,
-                current_proposal_id=locked_proposal.id,
-            ):
+            if Proposal.has_active_voting_proposal_conflict(current_proposal_id=locked_proposal.id):
                 continue
             locked_proposal.proposal_status = Proposal.VOTING
             locked_proposal.save(update_fields=['proposal_status'])
@@ -76,12 +71,6 @@ def _expire_stale_slotless_discussion_proposals(now) -> int:
         proposal_status=Proposal.DISCUSSION,
         last_updated_at__lte=expired_period,
         queue_slot__isnull=True,
-    ).exclude(
-        # Legacy asset proposals are still pre-scheduled at create time until the
-        # follow-up migration/cleanup lands, so keep the historical protection.
-        proposal_type__in=Proposal.ASSET_PROPOSAL_TYPES,
-    ).filter(
-        Q(start_at__isnull=True) | Q(end_at__isnull=True),
     ).update(proposal_status=Proposal.EXPIRED, action=Proposal.NONE)
 
 
@@ -382,9 +371,3 @@ def task_retry_failed_onchain_executions():
         # before any DB whitelist changes or onchain execution decisions happen.
         task_update_proposal_results(proposal.id, True)
 
-
-@celery_app.task(ignore_result=True)
-def check_proposals_with_bad_horizon_error():
-    failed_proposals = Proposal.objects.filter(payment_status=Proposal.HORIZON_ERROR)
-    for proposal in failed_proposals:
-        proposal.check_transaction()

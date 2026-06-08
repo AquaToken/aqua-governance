@@ -188,7 +188,11 @@ def find_queue_slot_conflict(
         hide=False,
         draft=False,
         action=Proposal.NONE,
-        proposal_status__in=(Proposal.DISCUSSION, Proposal.QUEUED, Proposal.VOTING),
+        # Transitional compatibility for rows that still mirror an occupied
+        # queue/voting window on Proposal.start_at/end_at but do not yet have a
+        # ProposalQueueSlot row. Slot-less DISCUSSION rows are intentionally not
+        # blockers anymore because draft/create-time reservation is retired.
+        proposal_status__in=(Proposal.QUEUED, Proposal.VOTING),
         start_at__isnull=False,
         end_at__isnull=False,
         start_at__lt=end_at,

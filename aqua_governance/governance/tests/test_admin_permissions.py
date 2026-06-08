@@ -2,7 +2,6 @@ import json
 from datetime import timedelta
 from unittest.mock import patch
 
-from django.conf import settings
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
@@ -222,25 +221,15 @@ class ProposalAdminPermissionTests(TestCase):
         self.assertTrue(form.is_valid(), form.errors)
         mock_lock.assert_called_once_with()
 
-    def test_manager_asset_queue_prefill_uses_general_voting_proposal(self):
-        now = timezone.now()
-        blocker = self._make_proposal(Proposal.PROPOSAL_TYPE_GENERAL)
-        blocker.proposal_status = Proposal.VOTING
-        blocker.start_at = now
-        blocker.end_at = now + timedelta(days=10)
-        blocker.save(update_fields=['proposal_status', 'start_at', 'end_at'])
-
+    def test_manager_add_form_does_not_prefill_voting_window(self):
         request = self.factory.get('/admin/')
         request.user = self._create_user(with_manage_perm=True)
 
         form_class = self.admin.get_form(request)
         form = form_class()
 
-        expected_start_at = blocker.end_at + timedelta(seconds=settings.ASSET_QUEUE_GAP_SECONDS)
-        expected_end_at = expected_start_at + timedelta(days=settings.ASSET_MIN_VOTING_DURATION_DAYS)
-
-        self.assertEqual(form.initial['start_at'], expected_start_at)
-        self.assertEqual(form.initial['end_at'], expected_end_at)
+        self.assertNotIn('start_at', form.initial)
+        self.assertNotIn('end_at', form.initial)
 
     @patch('aqua_governance.governance.forms.acquire_proposal_transition_lock')
     def test_manager_cannot_create_active_asset_proposal_with_overlapping_interval(self, mock_lock):

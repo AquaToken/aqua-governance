@@ -161,16 +161,32 @@ class ProposalQueueSlotModelTests(TestCase):
             )
         )
 
-    def test_queue_slot_availability_checks_legacy_scheduled_proposals_without_queue_rows(self):
+    def test_queue_slot_availability_checks_legacy_queued_proposals_without_queue_rows(self):
         self._make_proposal(
-            title='Legacy scheduled proposal',
+            title='Legacy queued proposal',
+            start_at=datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC),
+            end_at=datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC),
+            proposal_status=Proposal.QUEUED,
+            action=Proposal.NONE,
+        )
+
+        self.assertFalse(
+            is_queue_slot_available(
+                datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC),
+                datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC),
+            )
+        )
+
+    def test_queue_slot_availability_ignores_slotless_discussion_rows(self):
+        self._make_proposal(
+            title='Obsolete discussion reservation',
             start_at=datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC),
             end_at=datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC),
             proposal_status=Proposal.DISCUSSION,
             action=Proposal.NONE,
         )
 
-        self.assertFalse(
+        self.assertTrue(
             is_queue_slot_available(
                 datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC),
                 datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC),
