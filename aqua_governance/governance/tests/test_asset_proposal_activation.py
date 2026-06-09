@@ -8,7 +8,7 @@ from django.utils import timezone
 from django_quill.quill import Quill
 from rest_framework.test import APIClient
 
-from aqua_governance.governance.models import Proposal
+from aqua_governance.governance.models import Proposal, ProposalQueueSlot
 from aqua_governance.governance.proposal_queue import get_queue_week_start
 from aqua_governance.governance.serializers_v2 import ProposalCreateSerializer
 from aqua_governance.governance.serializers_v2 import SubmitSerializer
@@ -226,11 +226,12 @@ class AssetProposalActivationTests(TestCase):
 
     def test_asset_proposal_submit_rejects_when_asset_interval_overlaps_voting(self):
         start_at, end_at = self._queue_window(weeks_ahead=1)
-        self._create_proposal(
+        blocker = self._create_proposal(
             proposal_status=Proposal.VOTING,
             start_at=start_at,
             end_at=end_at,
         )
+        ProposalQueueSlot.objects.create(proposal=blocker, start_at=start_at, end_at=end_at)
         queued = self._create_proposal()
 
         serializer = SubmitSerializer(queued, data={
@@ -246,12 +247,13 @@ class AssetProposalActivationTests(TestCase):
 
     def test_asset_proposal_submit_rejects_when_general_proposal_interval_overlaps_voting(self):
         start_at, end_at = self._queue_window(weeks_ahead=1)
-        self._create_proposal(
+        blocker = self._create_proposal(
             proposal_type=Proposal.PROPOSAL_TYPE_GENERAL,
             proposal_status=Proposal.VOTING,
             start_at=start_at,
             end_at=end_at,
         )
+        ProposalQueueSlot.objects.create(proposal=blocker, start_at=start_at, end_at=end_at)
         queued = self._create_proposal()
 
         serializer = SubmitSerializer(queued, data={

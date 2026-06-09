@@ -6,7 +6,7 @@ from django.utils import timezone
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from aqua_governance.governance.models import Proposal
 from aqua_governance.governance.asset_payload import validate_asset_payload
-from aqua_governance.governance.proposal_queue import is_queue_slot_available
+from aqua_governance.governance.proposal_queue import is_queue_slot_available, validate_weekly_queue_slot
 from aqua_governance.governance.serializers_v2 import ASSET_FIELDS, ASSET_REQUIRED_TEXT_FIELDS
 from aqua_governance.utils.payments import check_transaction_xdr
 from aqua_governance.utils.widgets import CustomQuillWidget
@@ -102,6 +102,20 @@ class ProposalAdminForm(forms.ModelForm):
             end_at = None
 
         if (
+            not self.instance._state.adding
+            and target_status == Proposal.DISCUSSION
+            and self.instance.proposal_status != Proposal.DISCUSSION
+            and (start_at is not None or end_at is not None)
+        ):
+            # Leaving a queued/voting-style state for DISCUSSION must also drop
+            # any reserved window so the proposal cannot retain slot-like
+            # timing metadata without an attached queue slot.
+            cleaned_data['start_at'] = None
+            cleaned_data['end_at'] = None
+            start_at = None
+            end_at = None
+
+        if (
             self.instance._state.adding
             and target_status == Proposal.DISCUSSION
             and (start_at is not None or end_at is not None)
@@ -120,19 +134,46 @@ class ProposalAdminForm(forms.ModelForm):
             end_at_changed = 'end_at' in cleaned_data and cleaned_data['end_at'] != self.instance.end_at
 
         times_changed = start_at_changed or end_at_changed
-        is_active_status = target_status in (Proposal.DISCUSSION, Proposal.VOTING)
+        queue_relevant_status = target_status in (Proposal.QUEUED, Proposal.VOTING)
+        entering_queue_relevant_status = queue_relevant_status and (
+            self.instance._state.adding or target_status != self.instance.proposal_status
+        )
+        weekly_slot_validation_required = queue_relevant_status and (
+            times_changed or entering_queue_relevant_status
+        )
 
-        if is_active_status or times_changed:
+        if times_changed or entering_queue_relevant_status:
             acquire_proposal_transition_lock()
             interval_lock_acquired = True
-            if target_status == Proposal.VOTING and (not start_at or not end_at):
+            if target_status == Proposal.DISCUSSION and times_changed and (start_at is not None or end_at is not None):
                 raise ValidationError({
-                    'start_at': 'start_at is required for an active proposal.',
-                    'end_at': 'end_at is required for an active proposal.',
+                    'start_at': 'Discussion proposals must not set a voting window before submit.',
+                    'end_at': 'Discussion proposals must not set a voting window before submit.',
                 })
+
+            if queue_relevant_status and (not start_at or not end_at):
+                raise ValidationError({
+                    'start_at': 'start_at is required for a queued or voting proposal.',
+                    'end_at': 'end_at is required for a queued or voting proposal.',
+                })
+
             if start_at and end_at:
-                if is_active_status and end_at <= timezone.now():
-                    raise ValidationError({'end_at': 'end_at must be in the future.'})
+                now = timezone.now()
+                if weekly_slot_validation_required:
+                    validate_weekly_queue_slot(start_at, end_at, now=now)
+                if queue_relevant_status:
+                    if target_status == Proposal.QUEUED and start_at <= now:
+                        raise ValidationError({
+                            'start_at': 'Queued proposals must use a future queue slot.',
+                        })
+                    if target_status == Proposal.VOTING:
+                        if end_at <= now:
+                            raise ValidationError({'end_at': 'end_at must be in the future.'})
+                        if start_at > now:
+                            raise ValidationError({
+                                'start_at': 'Voting proposals must use the current queue slot.',
+                            })
+
                 current_proposal_id = None if self.instance._state.adding else self.instance.id
                 if not is_queue_slot_available(
                     start_at=start_at,

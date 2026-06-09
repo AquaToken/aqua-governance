@@ -1,15 +1,42 @@
 import logging
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
-from aqua_governance.governance.proposal_queue import find_queue_slot_conflict
+from aqua_governance.governance.proposal_queue import (
+    find_queue_slot_conflict,
+    sync_proposal_queue_slot,
+    validate_weekly_queue_slot,
+)
 from aqua_governance.utils.payments import check_proposal_status
 
 
 logger = logging.getLogger(__name__)
+
+
+try:
+    import sentry_sdk
+except ImportError:  # pragma: no cover — test dependencies may not include sentry-sdk
+    sentry_sdk = None
+
+
+def _alert_operator(message, extra=None):
+    """Send an operator-facing alert via Sentry and the application logger.
+
+    Intended for payment / slot-conflict paths where the human operator must
+    investigate.  Tests can mock this helper instead of reaching into
+    sentry_sdk internals.
+    """
+    extra = extra or {}
+    logger.error(message, extra=extra)
+    if sentry_sdk is not None:
+        with sentry_sdk.push_scope() as scope:
+            for key, value in extra.items():
+                scope.set_extra(key, value)
+            sentry_sdk.capture_message(message, level='error')
 
 
 def check_transaction(proposal):
@@ -87,6 +114,18 @@ def _check_submit_transaction(proposal):
                 'payment_status': status,
             }
 
+        try:
+            validate_weekly_queue_slot(new_start_at, new_end_at, now=now)
+        except ValidationError as exc:
+            _mark_submit_retry_state(locked_proposal, status)
+            _log_invalid_submit_window(locked_proposal, status, exc)
+            proposal.refresh_from_db()
+            return {
+                'outcome': 'invalid_submit_window',
+                'payment_status': status,
+                'errors': _validation_error_details(exc),
+            }
+
         if new_end_at and new_end_at <= now:
             _apply_submit_confirmation(
                 proposal,
@@ -108,7 +147,7 @@ def _check_submit_transaction(proposal):
             exclude_proposal_id=locked_proposal.id,
         )
         if conflict is not None:
-            _mark_submit_slot_conflict(locked_proposal, status, now)
+            _mark_submit_retry_state(locked_proposal, status)
             _log_submit_slot_conflict(locked_proposal, status, conflict)
             proposal.refresh_from_db()
             return {
@@ -119,15 +158,17 @@ def _check_submit_transaction(proposal):
 
         proposal_status = _resolve_submit_proposal_status(proposal, locked_proposal, now)
         try:
-            _apply_submit_confirmation(proposal, locked_proposal, status, proposal_status, now)
+            with transaction.atomic():
+                _apply_submit_confirmation(proposal, locked_proposal, status, proposal_status, now)
         except IntegrityError:
+            locked_proposal.refresh_from_db()
             conflict = find_queue_slot_conflict(
                 start_at=new_start_at,
                 end_at=new_end_at,
                 exclude_proposal_id=locked_proposal.id,
             )
             if conflict is not None:
-                _mark_submit_slot_conflict(locked_proposal, status, now)
+                _mark_submit_retry_state(locked_proposal, status)
                 _log_submit_slot_conflict(locked_proposal, status, conflict)
                 proposal.refresh_from_db()
                 return {
@@ -135,6 +176,7 @@ def _check_submit_transaction(proposal):
                     'payment_status': status,
                     'conflict': _serialize_queue_conflict(conflict),
                 }
+            _log_unexpected_submit_booking_integrity_error(locked_proposal, status)
             raise
 
         proposal.refresh_from_db()
@@ -196,8 +238,6 @@ def _apply_submit_confirmation(
     create_queue_slot=True,
 ):
     _create_submit_history(source_proposal, proposal)
-    if create_queue_slot:
-        _upsert_queue_slot(proposal, proposal.new_start_at, proposal.new_end_at)
     proposal.payment_status = status
     proposal.start_at = proposal.new_start_at
     proposal.end_at = proposal.new_end_at
@@ -211,12 +251,13 @@ def _apply_submit_confirmation(
     proposal.new_envelope_xdr = None
     proposal.new_transaction_hash = None
     proposal.save()
+    if create_queue_slot:
+        sync_proposal_queue_slot(proposal)
 
 
-def _mark_submit_slot_conflict(proposal, status, now):
+def _mark_submit_retry_state(proposal, status):
     proposal.payment_status = status
-    proposal.last_updated_at = now
-    proposal.save(update_fields=['payment_status', 'last_updated_at'])
+    proposal.save(update_fields=['payment_status'])
 
 
 def _resolve_submit_proposal_status(source_proposal, proposal, now):
@@ -241,49 +282,51 @@ def _apply_asset_create_transaction(proposal, status):
     proposal.refresh_from_db()
 
 
-def _upsert_queue_slot(proposal, start_at, end_at):
-    from aqua_governance.governance.models import ProposalQueueSlot
-
-    ProposalQueueSlot.objects.update_or_create(
-        proposal=proposal,
-        defaults={
-            'start_at': start_at,
-            'end_at': end_at,
-        },
-    )
-
-
 def _serialize_queue_conflict(conflict):
-    slot = conflict.slot
     return {
-        'proposal_id': conflict.proposal.id,
+        'proposal': conflict.proposal.id,
         'proposal_status': conflict.proposal.proposal_status,
-        'slot_id': slot.id if slot is not None else None,
-        'start_at': slot.start_at if slot is not None else conflict.proposal.start_at,
-        'end_at': slot.end_at if slot is not None else conflict.proposal.end_at,
+        'start_at': conflict.slot.start_at if conflict.slot is not None else conflict.proposal.start_at,
+        'end_at': conflict.slot.end_at if conflict.slot is not None else conflict.proposal.end_at,
     }
 
 
 def _log_submit_payment_not_confirmed(proposal, status):
-    if status != proposal.HORIZON_ERROR:
+    if status == proposal.HORIZON_ERROR:
+        _alert_operator(
+            'Submit payment could not be confirmed yet; queue slot not booked.',
+            extra={
+                'proposal_id': proposal.id,
+                'action': proposal.action,
+                'payment_status': status,
+                'proposal_status': proposal.proposal_status,
+                'transaction_hash': proposal.new_transaction_hash,
+                'selected_start_at': proposal.new_start_at,
+                'selected_end_at': proposal.new_end_at,
+            },
+        )
         return
 
-    logger.error(
-        'Submit payment could not be confirmed yet; queue slot not booked.',
-        extra={
-            'proposal_id': proposal.id,
-            'action': proposal.action,
-            'payment_status': status,
-            'proposal_status': proposal.proposal_status,
-            'transaction_hash': proposal.new_transaction_hash,
-            'selected_start_at': proposal.new_start_at,
-            'selected_end_at': proposal.new_end_at,
-        },
-    )
+    # Non‑FINE definitive failures (BAD_MEMO, INVALID_PAYMENT, FAILED_TRANSACTION)
+    # are currently surfaced to the proposer only.  A warning log at least lets
+    # operators trace them.
+    if status != proposal.FINE:
+        logger.warning(
+            'Submit payment finished with a non-recoverable status; queue slot not booked.',
+            extra={
+                'proposal_id': proposal.id,
+                'action': proposal.action,
+                'payment_status': status,
+                'proposal_status': proposal.proposal_status,
+                'transaction_hash': proposal.new_transaction_hash,
+                'selected_start_at': proposal.new_start_at,
+                'selected_end_at': proposal.new_end_at,
+            },
+        )
 
 
 def _log_submit_slot_conflict(proposal, status, conflict):
-    logger.error(
+    _alert_operator(
         'Confirmed submit payment could not book queue slot because it is already occupied.',
         extra={
             'proposal_id': proposal.id,
@@ -300,6 +343,41 @@ def _log_submit_slot_conflict(proposal, status, conflict):
             'conflicting_end_at': conflict.slot.end_at if conflict.slot is not None else conflict.proposal.end_at,
         },
     )
+
+
+def _log_invalid_submit_window(proposal, status, exc: ValidationError):
+    _alert_operator(
+        'Confirmed submit payment could not be applied because the selected queue slot is no longer valid.',
+        extra={
+            'proposal_id': proposal.id,
+            'action': proposal.action,
+            'payment_status': status,
+            'proposal_status': proposal.proposal_status,
+            'transaction_hash': proposal.new_transaction_hash,
+            'selected_start_at': proposal.new_start_at,
+            'selected_end_at': proposal.new_end_at,
+            'validation_errors': _validation_error_details(exc),
+        },
+    )
+
+
+def _log_unexpected_submit_booking_integrity_error(proposal, status):
+    _alert_operator(
+        'Confirmed submit payment hit an unexpected integrity error while booking the queue slot.',
+        extra={
+            'proposal_id': proposal.id,
+            'action': proposal.action,
+            'payment_status': status,
+            'proposal_status': proposal.proposal_status,
+            'transaction_hash': proposal.new_transaction_hash,
+            'selected_start_at': proposal.new_start_at,
+            'selected_end_at': proposal.new_end_at,
+        },
+    )
+
+
+def _validation_error_details(exc: ValidationError):
+    return getattr(exc, 'message_dict', {'__all__': exc.messages})
 
 
 def _history_model(proposal):
