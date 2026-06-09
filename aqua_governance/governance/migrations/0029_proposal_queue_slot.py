@@ -37,6 +37,16 @@ def _has_exact_weekly_range(start_at, end_at):
     )
 
 
+def _has_legacy_monday_weekly_range(start_at, end_at):
+    return start_at.weekday() == 0 and end_at == start_at + QUEUE_SLOT_DURATION
+
+
+def _normalize_legacy_monday_weekly_range(start_at):
+    normalized_start_at = start_at.replace(hour=0, minute=0, second=0, microsecond=0)
+    normalized_end_at = normalized_start_at + QUEUE_SLOT_DURATION - QUEUE_SLOT_END_INCLUSIVE_OFFSET
+    return normalized_start_at, normalized_end_at
+
+
 def _validate_candidate_window(proposal, now):
     start_at = _as_utc(proposal.start_at, proposal_id=proposal.id, field_name='start_at')
     end_at = _as_utc(proposal.end_at, proposal_id=proposal.id, field_name='end_at')
@@ -44,23 +54,29 @@ def _validate_candidate_window(proposal, now):
     if end_at <= start_at:
         raise ValueError(f'Proposal {proposal.id} has invalid queue slot range: end_at must be after start_at.')
 
-    if not _has_exact_weekly_range(start_at, end_at):
+    if _has_exact_weekly_range(start_at, end_at):
+        normalized_start_at = start_at
+        normalized_end_at = end_at
+    elif _has_legacy_monday_weekly_range(start_at, end_at):
+        normalized_start_at, normalized_end_at = _normalize_legacy_monday_weekly_range(start_at)
+    else:
         raise ValueError(
             f'Proposal {proposal.id} has invalid queue slot range: '
-            'expected Monday 00:00:00 UTC -> Sunday 23:59:59 UTC.'
+            'expected Monday 00:00:00 UTC -> Sunday 23:59:59 UTC, '
+            'or a legacy Monday-based exact 7-day window that can be normalized.'
         )
 
-    if proposal.proposal_status == 'DISCUSSION' and start_at <= now:
+    if proposal.proposal_status == 'DISCUSSION' and normalized_start_at <= now:
         raise ValueError(
             f'Proposal {proposal.id} is DISCUSSION but its scheduled slot already started.'
         )
 
-    if proposal.proposal_status == 'VOTING' and not (start_at <= now <= end_at):
+    if proposal.proposal_status == 'VOTING' and not (normalized_start_at <= now <= normalized_end_at):
         raise ValueError(
             f'Proposal {proposal.id} is VOTING but is not active at migration time.'
         )
 
-    return start_at, end_at
+    return normalized_start_at, normalized_end_at
 
 
 def backfill_proposal_queue_slots(apps, schema_editor):
@@ -113,13 +129,12 @@ def backfill_proposal_queue_slots(apps, schema_editor):
         for proposal, start_at, end_at in validated_candidates
     ])
 
-    queued_ids = [
-        proposal.id
-        for proposal, _start_at, _end_at in validated_candidates
-        if proposal.proposal_status == 'DISCUSSION'
-    ]
-    if queued_ids:
-        Proposal.objects.filter(id__in=queued_ids).update(proposal_status='QUEUED')
+    for proposal, start_at, end_at in validated_candidates:
+        Proposal.objects.filter(id=proposal.id).update(
+            start_at=start_at,
+            end_at=end_at,
+            proposal_status='QUEUED' if proposal.proposal_status == 'DISCUSSION' else proposal.proposal_status,
+        )
 
 
 class Migration(migrations.Migration):

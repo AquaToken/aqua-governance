@@ -59,33 +59,37 @@ class ProposalQueueSlotBackfillMigrationTests(TransactionTestCase):
         return self.executor.loader.project_state(self.migrate_to).apps
 
     def test_forward_backfills_only_current_future_real_asset_slots(self):
+        current_legacy_start = datetime(2026, 6, 8, 9, 10, 6, 786247, tzinfo=UTC)
+        current_legacy_end = current_legacy_start + timedelta(days=7)
         current_start = datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC)
         current_end = current_start + timedelta(days=7, seconds=-1)
-        future_start = datetime(2026, 6, 15, 0, 0, 0, tzinfo=UTC)
+        future_legacy_start = datetime(2026, 6, 22, 9, 10, 8, 786247, tzinfo=UTC)
+        future_legacy_end = future_legacy_start + timedelta(days=7)
+        future_start = datetime(2026, 6, 22, 0, 0, 0, tzinfo=UTC)
         future_end = future_start + timedelta(days=7, seconds=-1)
-        later_start = datetime(2026, 6, 22, 0, 0, 0, tzinfo=UTC)
-        later_end = later_start + timedelta(days=7, seconds=-1)
+        strict_future_start = datetime(2026, 6, 29, 0, 0, 0, tzinfo=UTC)
+        strict_future_end = strict_future_start + timedelta(days=7, seconds=-1)
         past_start = datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC)
         past_end = past_start + timedelta(days=7, seconds=-1)
 
         active_voting = self._create_proposal(
             title='Active asset vote',
             proposal_status='VOTING',
-            start_at=current_start,
-            end_at=current_end,
+            start_at=current_legacy_start,
+            end_at=current_legacy_end,
         )
         future_discussion = self._create_proposal(
             title='Future asset discussion',
             proposal_status='DISCUSSION',
-            start_at=future_start,
-            end_at=future_end,
+            start_at=future_legacy_start,
+            end_at=future_legacy_end,
         )
         future_remove = self._create_proposal(
             title='Future remove asset discussion',
             proposal_type='REMOVE_ASSET',
             proposal_status='DISCUSSION',
-            start_at=later_start,
-            end_at=later_end,
+            start_at=strict_future_start,
+            end_at=strict_future_end,
         )
 
         self._create_proposal(
@@ -140,13 +144,23 @@ class ProposalQueueSlotBackfillMigrationTests(TransactionTestCase):
             {
                 active_voting.id: (current_start, current_end, FIXED_NOW),
                 future_discussion.id: (future_start, future_end, FIXED_NOW),
-                future_remove.id: (later_start, later_end, FIXED_NOW),
+                future_remove.id: (strict_future_start, strict_future_end, FIXED_NOW),
             },
         )
 
-        self.assertEqual(Proposal.objects.get(id=active_voting.id).proposal_status, 'VOTING')
-        self.assertEqual(Proposal.objects.get(id=future_discussion.id).proposal_status, 'QUEUED')
-        self.assertEqual(Proposal.objects.get(id=future_remove.id).proposal_status, 'QUEUED')
+        active_voting_migrated = Proposal.objects.get(id=active_voting.id)
+        future_discussion_migrated = Proposal.objects.get(id=future_discussion.id)
+        future_remove_migrated = Proposal.objects.get(id=future_remove.id)
+
+        self.assertEqual(active_voting_migrated.proposal_status, 'VOTING')
+        self.assertEqual(active_voting_migrated.start_at, current_start)
+        self.assertEqual(active_voting_migrated.end_at, current_end)
+        self.assertEqual(future_discussion_migrated.proposal_status, 'QUEUED')
+        self.assertEqual(future_discussion_migrated.start_at, future_start)
+        self.assertEqual(future_discussion_migrated.end_at, future_end)
+        self.assertEqual(future_remove_migrated.proposal_status, 'QUEUED')
+        self.assertEqual(future_remove_migrated.start_at, strict_future_start)
+        self.assertEqual(future_remove_migrated.end_at, strict_future_end)
         self.assertEqual(Proposal.objects.get(id=general.id).proposal_status, 'DISCUSSION')
         self.assertEqual(Proposal.objects.get(id=invalid_payment.id).proposal_status, 'DISCUSSION')
         self.assertEqual(Proposal.objects.get(id=draft_asset.id).proposal_status, 'DISCUSSION')
@@ -155,9 +169,11 @@ class ProposalQueueSlotBackfillMigrationTests(TransactionTestCase):
         self.assertFalse(ProposalQueueSlot.objects.filter(proposal_id=invalid_payment.id).exists())
         self.assertFalse(ProposalQueueSlot.objects.filter(proposal_id=draft_asset.id).exists())
 
-    def test_forward_fails_on_duplicate_starts(self):
-        start_at = datetime(2026, 6, 15, 0, 0, 0, tzinfo=UTC)
-        end_at = start_at + timedelta(days=7, seconds=-1)
+    def test_forward_fails_when_legacy_normalization_creates_duplicate_slot(self):
+        start_at = datetime(2026, 6, 15, 9, 10, 0, tzinfo=UTC)
+        end_at = start_at + timedelta(days=7)
+        duplicate_start_at = datetime(2026, 6, 15, 15, 45, 0, tzinfo=UTC)
+        duplicate_end_at = duplicate_start_at + timedelta(days=7)
 
         self._create_proposal(
             title='First duplicate asset slot',
@@ -169,8 +185,8 @@ class ProposalQueueSlotBackfillMigrationTests(TransactionTestCase):
             title='Second duplicate asset slot',
             proposal_type='REMOVE_ASSET',
             proposal_status='DISCUSSION',
-            start_at=start_at,
-            end_at=end_at,
+            start_at=duplicate_start_at,
+            end_at=duplicate_end_at,
         )
 
         with patch(MIGRATION_NOW_PATCH, return_value=FIXED_NOW):
@@ -182,8 +198,21 @@ class ProposalQueueSlotBackfillMigrationTests(TransactionTestCase):
         self._create_proposal(
             title='Invalid weekly asset slot',
             proposal_status='DISCUSSION',
-            start_at=datetime(2026, 6, 16, 0, 0, 0, tzinfo=UTC),
-            end_at=datetime(2026, 6, 22, 23, 59, 59, tzinfo=UTC),
+            start_at=datetime(2026, 6, 15, 9, 10, 0, tzinfo=UTC),
+            end_at=datetime(2026, 6, 22, 9, 10, 1, tzinfo=UTC),
+        )
+
+        with patch(MIGRATION_NOW_PATCH, return_value=FIXED_NOW):
+            with self.assertRaisesMessage(ValueError, 'invalid queue slot range'):
+                self.executor = MigrationExecutor(connection)
+                self.executor.migrate(self.migrate_to)
+
+    def test_forward_fails_on_non_monday_legacy_range(self):
+        self._create_proposal(
+            title='Tuesday legacy asset slot',
+            proposal_status='DISCUSSION',
+            start_at=datetime(2026, 6, 16, 9, 10, 0, tzinfo=UTC),
+            end_at=datetime(2026, 6, 23, 9, 10, 0, tzinfo=UTC),
         )
 
         with patch(MIGRATION_NOW_PATCH, return_value=FIXED_NOW):
