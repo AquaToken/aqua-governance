@@ -7,7 +7,8 @@ from aqua_governance.governance.asset_payload import validate_asset_payload
 from aqua_governance.governance.asset_tokens import upsert_asset_token_from_proposal
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from aqua_governance.governance.models import AssetToken, Proposal, HistoryProposal, ProposalQueueSlot
-from aqua_governance.governance.proposal_queue import is_queue_slot_available, validate_weekly_queue_slot
+from aqua_governance.governance.proposal_queue import validate_weekly_queue_slot
+from aqua_governance.governance.proposal_queue_slots import is_queue_slot_available
 from aqua_governance.governance.serializer_fields import QuillField
 from aqua_governance.governance.serializers import HistoryProposalSerializer, LogVoteSerializer
 from aqua_governance.utils.payments import check_transaction_xdr
@@ -683,14 +684,12 @@ class ProposalQueueSlotSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProposalQueueSlot
         fields = [
-            "id",
             "proposal",
             "proposal_title",
             "proposal_status",
             "start_at",
             "end_at",
-            "created_at",
-            "updated_at",
+            "occupied_at",
         ]
 
 

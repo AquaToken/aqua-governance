@@ -6,8 +6,10 @@ from django.db import IntegrityError
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from aqua_governance.governance import proposal_transactions
 from aqua_governance.governance.models import Proposal, ProposalQueueSlot
-from aqua_governance.governance.proposal_queue import QueueSlotConflict, get_queue_week_start
+from aqua_governance.governance.proposal_queue import get_queue_week_start
+from aqua_governance.governance.proposal_queue_slots import QueueSlotConflict
 from aqua_governance.governance.serializers_v2 import SubmitSerializer
 from aqua_governance.governance.tests._factories import make_asset_proposal_raw, patch_ice_circulating_supply
 
@@ -102,7 +104,7 @@ class SubmitBookingFlowTests(TestCase):
             new_transaction_hash='d' * 64,
         )
 
-        result = proposal.check_transaction()
+        result = proposal_transactions.check_transaction(proposal)
 
         proposal.refresh_from_db()
         self.assertEqual(result['outcome'], 'booked')
@@ -227,7 +229,7 @@ class SubmitBookingFlowTests(TestCase):
             new_transaction_hash='e' * 64,
         )
 
-        result = proposal.check_transaction()
+        result = proposal_transactions.check_transaction(proposal)
 
         proposal.refresh_from_db()
         self.assertEqual(result['outcome'], 'booked')
@@ -246,7 +248,7 @@ class SubmitBookingFlowTests(TestCase):
             new_transaction_hash='f' * 64,
         )
 
-        result = proposal.check_transaction()
+        result = proposal_transactions.check_transaction(proposal)
 
         proposal.refresh_from_db()
         self.assertEqual(result['outcome'], 'payment_not_confirmed')
@@ -286,7 +288,7 @@ class SubmitBookingFlowTests(TestCase):
         )
         Proposal.objects.filter(id=proposal.id).update(last_updated_at=stale_time)
 
-        result = proposal.check_transaction()
+        result = proposal_transactions.check_transaction(proposal)
 
         proposal.refresh_from_db()
         self.assertEqual(result['outcome'], 'slot_conflict')
@@ -346,7 +348,7 @@ class SubmitBookingFlowTests(TestCase):
             QueueSlotConflict(proposal=blocking_proposal, slot=blocking_slot),
         ]
 
-        result = proposal.check_transaction()
+        result = proposal_transactions.check_transaction(proposal)
 
         proposal.refresh_from_db()
         self.assertEqual(result['outcome'], 'slot_conflict')
@@ -440,8 +442,8 @@ class SubmitBookingFlowTests(TestCase):
             new_transaction_hash='3' * 64,
         )
 
-        first_result = proposal.check_transaction()
-        second_result = proposal.check_transaction()
+        first_result = proposal_transactions.check_transaction(proposal)
+        second_result = proposal_transactions.check_transaction(proposal)
 
         proposal.refresh_from_db()
         self.assertEqual(first_result['outcome'], 'payment_not_confirmed')
@@ -518,7 +520,7 @@ class SubmitBookingFlowTests(TestCase):
             new_transaction_hash='7' * 64,
         )
 
-        proposal.check_transaction()
+        proposal_transactions.check_transaction(proposal)
 
         mock_sentry.push_scope.assert_called_once()
         scope = mock_sentry.push_scope.return_value.__enter__.return_value
@@ -557,7 +559,7 @@ class SubmitBookingFlowTests(TestCase):
             new_transaction_hash='9' * 64,
         )
 
-        proposal.check_transaction()
+        proposal_transactions.check_transaction(proposal)
 
         mock_sentry.push_scope.assert_called_once()
         scope = mock_sentry.push_scope.return_value.__enter__.return_value

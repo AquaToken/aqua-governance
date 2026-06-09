@@ -8,6 +8,7 @@ from django.utils import timezone
 from django_quill.quill import Quill
 from rest_framework.test import APIClient
 
+from aqua_governance.governance import proposal_transactions
 from aqua_governance.governance.models import Proposal, ProposalQueueSlot
 from aqua_governance.governance.proposal_queue import get_queue_week_start
 from aqua_governance.governance.serializers_v2 import ProposalCreateSerializer
@@ -96,7 +97,7 @@ class AssetProposalActivationTests(TestCase):
 
         self.assertEqual(mock_check_xdr.call_args.args[1], settings.PROPOSAL_CREATE_OR_UPDATE_COST)
 
-    @patch('aqua_governance.governance.models.Proposal.check_transaction')
+    @patch('aqua_governance.governance.tasks.proposal_transactions.check_transaction')
     def test_pending_payment_task_retries_visible_pending_creates(self, mock_check_transaction):
         pending = Proposal.objects.create(
             proposed_by=DEFAULT_PROPOSED_BY,
@@ -155,7 +156,7 @@ class AssetProposalActivationTests(TestCase):
         blocker.proposal_status = Proposal.EXPIRED
         blocker.save(update_fields=['proposal_status'])
 
-        queued.check_transaction()
+        proposal_transactions.check_transaction(queued)
         queued.refresh_from_db()
 
         self.assertFalse(queued.draft)
