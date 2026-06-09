@@ -1,5 +1,5 @@
 from datetime import timedelta
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.test import TestCase, override_settings
 from django.utils import timezone
@@ -25,6 +25,10 @@ class ProposalTimeQueueTests(TestCase):
         return start_at, end_at
 
     def _attach_queue_slot(self, proposal, *, start_at, end_at):
+        if proposal.start_at != start_at or proposal.end_at != end_at:
+            proposal.start_at = start_at
+            proposal.end_at = end_at
+            proposal.save(update_fields=['start_at', 'end_at'])
         return ProposalQueueSlot.objects.create(
             proposal=proposal,
             start_at=start_at,
@@ -46,7 +50,12 @@ class ProposalTimeQueueTests(TestCase):
     def test_submit_serializer_rejects_asset_interval_overlap(self):
         start_at, end_at = self._queue_slot(weeks_ahead=1)
         ProposalQueueSlot.objects.create(
-            proposal=self._create_proposal(title='Blocked slot'),
+            proposal=self._create_proposal(
+                title='Blocked slot',
+                proposal_status=Proposal.QUEUED,
+                start_at=start_at,
+                end_at=end_at,
+            ),
             start_at=start_at,
             end_at=end_at,
         )
@@ -178,6 +187,9 @@ class ProposalTimeQueueTests(TestCase):
             proposal=self._create_proposal(
                 proposal_type=Proposal.PROPOSAL_TYPE_GENERAL,
                 title='Blocked slot',
+                proposal_status=Proposal.QUEUED,
+                start_at=start_at,
+                end_at=end_at,
             ),
             start_at=start_at,
             end_at=end_at,
@@ -274,6 +286,96 @@ class ProposalTimeQueueTests(TestCase):
         mock_update_results.assert_not_called()
 
     @patch('aqua_governance.governance.tasks.task_update_proposal_results.delay')
+    def test_sync_task_fails_closed_for_slotless_due_queued_proposal(self, mock_update_results):
+        start_at = timezone.now() - timedelta(minutes=1)
+        end_at = timezone.now() + timedelta(days=1)
+        slotless = self._create_proposal(
+            title='Legacy queued without slot',
+            proposal_status=Proposal.QUEUED,
+            start_at=start_at,
+            end_at=end_at,
+        )
+        slotted = self._create_proposal(
+            title='Queue-backed proposal',
+            proposal_status=Proposal.QUEUED,
+            start_at=start_at,
+            end_at=end_at,
+            transaction_hash='1' * 64,
+        )
+        self._attach_queue_slot(slotted, start_at=start_at, end_at=end_at)
+
+        task_sync_proposal_statuses_by_time()
+
+        slotless.refresh_from_db()
+        slotted.refresh_from_db()
+        self.assertEqual(slotless.proposal_status, Proposal.QUEUED)
+        self.assertEqual(slotted.proposal_status, Proposal.VOTING)
+        mock_update_results.assert_not_called()
+
+    @patch('aqua_governance.governance.tasks.task_update_proposal_results.delay')
+    @patch('aqua_governance.governance.tasks.Proposal.objects.select_for_update')
+    def test_start_due_post_lock_recheck_skips_race_modified_proposal(self, mock_sfu, mock_update_results):
+        """The post-lock re-check should skip a proposal that was modified
+        between the initial query and lock acquisition (e.g. hidden by
+        another process)."""
+        now = timezone.now()
+        start_at = now - timedelta(minutes=1)
+        end_at = now + timedelta(days=1)
+        proposal = self._create_proposal(
+            proposal_status=Proposal.QUEUED,
+            start_at=start_at,
+            end_at=end_at,
+        )
+        self._attach_queue_slot(proposal, start_at=start_at, end_at=end_at)
+
+        mock_locked = MagicMock()
+        mock_locked.proposal_status = Proposal.QUEUED
+        mock_locked.hide = True  # Race: another process hid this proposal
+        mock_locked.draft = False
+        mock_locked.action = Proposal.NONE
+        mock_locked.start_at = start_at
+        mock_locked.end_at = end_at
+        mock_locked.id = proposal.id
+
+        mock_sfu.return_value.get.return_value = mock_locked
+
+        from aqua_governance.governance.tasks import _start_due_scheduled_proposals
+        _start_due_scheduled_proposals(now)
+
+        mock_locked.save.assert_not_called()
+
+    @patch('aqua_governance.governance.tasks.task_update_proposal_results.delay')
+    @patch('aqua_governance.governance.tasks.Proposal.objects.select_for_update')
+    def test_start_due_post_lock_recheck_skips_status_changed(self, mock_sfu, mock_update_results):
+        """The post-lock re-check should skip a proposal whose status was
+        changed to a non-QUEUED value by a concurrent process."""
+        now = timezone.now()
+        start_at = now - timedelta(minutes=1)
+        end_at = now + timedelta(days=1)
+        proposal = self._create_proposal(
+            proposal_status=Proposal.QUEUED,
+            start_at=start_at,
+            end_at=end_at,
+        )
+        self._attach_queue_slot(proposal, start_at=start_at, end_at=end_at)
+
+        mock_locked = MagicMock()
+        mock_locked.proposal_status = Proposal.DISCUSSION
+        mock_locked.hide = False
+        mock_locked.draft = False
+        mock_locked.action = Proposal.NONE
+        mock_locked.start_at = start_at
+        mock_locked.end_at = end_at
+        mock_locked.id = proposal.id
+
+        mock_sfu.return_value.get.return_value = mock_locked
+
+        from aqua_governance.governance.tasks import _start_due_scheduled_proposals
+        _start_due_scheduled_proposals(now)
+
+        mock_locked.save.assert_not_called()
+
+    @patch('aqua_governance.governance.tasks.task_update_proposal_results.delay')
     def test_sync_task_does_not_start_due_queued_proposal_when_any_proposal_is_voting(self, mock_update_results):
         now = timezone.now()
         blocker = self._create_proposal(
@@ -333,6 +435,7 @@ class ProposalTimeQueueTests(TestCase):
         proposal.refresh_from_db()
         self.assertEqual(proposal.proposal_status, Proposal.VOTED)
         mock_update_results.assert_called_once_with(proposal.id, True)
+        self.assertFalse(ProposalQueueSlot.objects.filter(proposal=proposal).exists())
 
     @patch('aqua_governance.governance.tasks.task_update_proposal_results.delay')
     def test_sync_task_finishes_before_starting_adjacent_next_proposal(self, mock_update_results):
@@ -442,8 +545,9 @@ class ProposalTimeQueueTests(TestCase):
         self.assertEqual(proposal.proposal_status, Proposal.EXPIRED)
         mock_update_results.assert_not_called()
 
+    @patch('aqua_governance.governance.proposal_transactions._alert_operator')
     @patch('aqua_governance.governance.proposal_transactions.check_proposal_status', return_value=Proposal.FINE)
-    def test_late_submit_payment_expires_already_ended_window(self, _mock_check_status):
+    def test_late_submit_payment_keeps_to_submit_when_window_is_no_longer_valid(self, _mock_check_status, mock_alert):
         proposal = self._create_proposal(
             action=Proposal.TO_SUBMIT,
             new_start_at=timezone.now() - timedelta(days=8),
@@ -456,8 +560,12 @@ class ProposalTimeQueueTests(TestCase):
 
         proposal.refresh_from_db()
         self.assertEqual(proposal.payment_status, Proposal.FINE)
-        self.assertEqual(proposal.proposal_status, Proposal.EXPIRED)
-        self.assertEqual(proposal.action, Proposal.NONE)
+        self.assertEqual(proposal.proposal_status, Proposal.DISCUSSION)
+        self.assertEqual(proposal.action, Proposal.TO_SUBMIT)
+        self.assertIsNone(proposal.start_at)
+        self.assertIsNone(proposal.end_at)
+        self.assertFalse(ProposalQueueSlot.objects.filter(proposal=proposal).exists())
+        mock_alert.assert_called_once()
 
 
 @patch('aqua_governance.governance.serializers_v2.check_transaction_xdr', return_value=Proposal.HORIZON_ERROR)

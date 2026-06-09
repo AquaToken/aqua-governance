@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone as datetime_timezone
+from unittest.mock import patch
 
 from django.contrib.admin.sites import AdminSite
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.test import SimpleTestCase, TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -13,6 +14,7 @@ from aqua_governance.governance.proposal_queue import (
     has_exact_weekly_range,
     is_queue_slot_available,
     is_utc_monday_start,
+    sync_proposal_queue_slot,
     validate_weekly_queue_slot,
 )
 from aqua_governance.governance.tests._factories import make_asset_proposal_raw
@@ -128,7 +130,12 @@ class ProposalQueueSlotModelTests(TestCase):
             )
 
     def test_queue_slot_availability_checks_overlaps(self):
-        proposal = self._make_proposal(title='Occupied')
+        proposal = self._make_proposal(
+            title='Occupied',
+            proposal_status=Proposal.QUEUED,
+            start_at=datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC),
+            end_at=datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC),
+        )
         ProposalQueueSlot.objects.create(
             proposal=proposal,
             start_at=datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC),
@@ -161,21 +168,52 @@ class ProposalQueueSlotModelTests(TestCase):
             )
         )
 
-    def test_queue_slot_availability_checks_legacy_queued_proposals_without_queue_rows(self):
+    def test_queue_slot_availability_ignores_slotless_queued_and_voting_rows(self):
+        start_at = datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC)
+        end_at = datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC)
+
         self._make_proposal(
             title='Legacy queued proposal',
-            start_at=datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC),
-            end_at=datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC),
+            start_at=start_at,
+            end_at=end_at,
             proposal_status=Proposal.QUEUED,
             action=Proposal.NONE,
         )
-
-        self.assertFalse(
-            is_queue_slot_available(
-                datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC),
-                datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC),
-            )
+        self._make_proposal(
+            title='Legacy voting proposal',
+            start_at=start_at,
+            end_at=end_at,
+            proposal_status=Proposal.VOTING,
+            action=Proposal.NONE,
+            transaction_hash='f' * 64,
         )
+
+        self.assertTrue(is_queue_slot_available(start_at, end_at))
+
+    def test_queue_slot_availability_ignores_mismatched_queued_and_voting_slot_rows(self):
+        occupied_start = datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC)
+        occupied_end = datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC)
+        actual_start = datetime(2026, 6, 15, 0, 0, 0, tzinfo=UTC)
+        actual_end = datetime(2026, 6, 21, 23, 59, 59, tzinfo=UTC)
+
+        for status in (Proposal.QUEUED, Proposal.VOTING):
+            with self.subTest(status=status):
+                ProposalQueueSlot.objects.all().delete()
+                Proposal.objects.all().delete()
+
+                ghost = self._make_proposal(
+                    title=f'Ghost {status.lower()} proposal',
+                    proposal_status=status,
+                    start_at=actual_start,
+                    end_at=actual_end,
+                )
+                ProposalQueueSlot.objects.create(
+                    proposal=ghost,
+                    start_at=occupied_start,
+                    end_at=occupied_end,
+                )
+
+                self.assertTrue(is_queue_slot_available(occupied_start, occupied_end))
 
     def test_queue_slot_availability_ignores_slotless_discussion_rows(self):
         self._make_proposal(
@@ -193,30 +231,173 @@ class ProposalQueueSlotModelTests(TestCase):
             )
         )
 
+    def test_sync_removes_slots_for_non_public_or_pending_proposals(self):
+        start_at = datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC)
+        end_at = datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC)
+        scenarios = [
+            ('hidden', {'hide': True}),
+            ('draft', {'draft': True}),
+            ('pending', {'action': Proposal.TO_SUBMIT}),
+        ]
+
+        for label, updates in scenarios:
+            with self.subTest(label=label):
+                proposal = self._make_proposal(
+                    title=f'{label.title()} queued proposal',
+                    proposal_status=Proposal.QUEUED,
+                    action=Proposal.NONE,
+                    start_at=start_at,
+                    end_at=end_at,
+                )
+                ProposalQueueSlot.objects.create(
+                    proposal=proposal,
+                    start_at=start_at,
+                    end_at=end_at,
+                )
+
+                for field_name, value in updates.items():
+                    setattr(proposal, field_name, value)
+
+                sync_proposal_queue_slot(proposal)
+
+                self.assertFalse(ProposalQueueSlot.objects.filter(proposal=proposal).exists())
+
+    def test_queue_slot_availability_ignores_hidden_draft_and_pending_slot_rows(self):
+        start_at = datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC)
+        end_at = datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC)
+        scenarios = [
+            ('hidden', {'hide': True}),
+            ('draft', {'draft': True}),
+            ('pending', {'action': Proposal.TO_SUBMIT}),
+        ]
+
+        for label, overrides in scenarios:
+            with self.subTest(label=label):
+                ProposalQueueSlot.objects.all().delete()
+                proposal = self._make_proposal(
+                    title=f'{label.title()} slot row',
+                    proposal_status=Proposal.QUEUED,
+                    start_at=start_at,
+                    end_at=end_at,
+                    **overrides,
+                )
+                ProposalQueueSlot.objects.create(
+                    proposal=proposal,
+                    start_at=start_at,
+                    end_at=end_at,
+                )
+
+                self.assertTrue(is_queue_slot_available(start_at, end_at))
+
+    def test_sync_reclaims_mismatched_queued_and_voting_slot_rows_for_same_start(self):
+        target_start = datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC)
+        target_end = datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC)
+        ghost_start = datetime(2026, 6, 15, 0, 0, 0, tzinfo=UTC)
+        ghost_end = datetime(2026, 6, 21, 23, 59, 59, tzinfo=UTC)
+
+        for status in (Proposal.QUEUED, Proposal.VOTING):
+            with self.subTest(status=status):
+                ProposalQueueSlot.objects.all().delete()
+                Proposal.objects.all().delete()
+
+                ghost = self._make_proposal(
+                    title=f'Ghost {status.lower()} proposal',
+                    proposal_status=status,
+                    start_at=ghost_start,
+                    end_at=ghost_end,
+                )
+                ProposalQueueSlot.objects.create(
+                    proposal=ghost,
+                    start_at=target_start,
+                    end_at=target_end,
+                )
+
+                target = self._make_proposal(
+                    title='Target proposal',
+                    proposal_status=Proposal.QUEUED,
+                    start_at=target_start,
+                    end_at=target_end,
+                )
+
+                sync_proposal_queue_slot(target)
+
+                self.assertFalse(ProposalQueueSlot.objects.filter(proposal=ghost).exists())
+                self.assertTrue(
+                    ProposalQueueSlot.objects.filter(
+                        proposal=target,
+                        start_at=target_start,
+                        end_at=target_end,
+                    ).exists()
+                )
+
+    def test_sync_update_recovers_from_integrity_error_inside_outer_transaction(self):
+        original_start = datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC)
+        original_end = datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC)
+        target_start = datetime(2026, 6, 15, 0, 0, 0, tzinfo=UTC)
+        target_end = datetime(2026, 6, 21, 23, 59, 59, tzinfo=UTC)
+        target = self._make_proposal(
+            title='Target proposal',
+            proposal_status=Proposal.QUEUED,
+            start_at=original_start,
+            end_at=original_end,
+        )
+        ProposalQueueSlot.objects.create(
+            proposal=target,
+            start_at=original_start,
+            end_at=original_end,
+        )
+        stale = self._make_proposal(
+            title='Hidden stale proposal',
+            proposal_status=Proposal.QUEUED,
+            hide=True,
+            start_at=target_start,
+            end_at=target_end,
+        )
+        ProposalQueueSlot.objects.create(
+            proposal=stale,
+            start_at=target_start,
+            end_at=target_end,
+        )
+        target.start_at = target_start
+        target.end_at = target_end
+
+        from aqua_governance.governance import proposal_queue as proposal_queue_module
+
+        original_delete = proposal_queue_module._delete_stale_queue_slots_for_start_at
+        delete_call_count = {'count': 0}
+
+        def delayed_delete(*args, **kwargs):
+            delete_call_count['count'] += 1
+            if delete_call_count['count'] == 1:
+                return 0
+            return original_delete(*args, **kwargs)
+
+        with patch(
+            'aqua_governance.governance.proposal_queue._delete_stale_queue_slots_for_start_at',
+            side_effect=delayed_delete,
+        ):
+            with transaction.atomic():
+                sync_proposal_queue_slot(target)
+                self.assertTrue(
+                    ProposalQueueSlot.objects.filter(
+                        proposal=target,
+                        start_at=target_start,
+                        end_at=target_end,
+                    ).exists()
+                )
+
+        self.assertFalse(ProposalQueueSlot.objects.filter(proposal=stale).exists())
+
 
 EXPECTED_SLOT_KEYS = {
     'id',
     'proposal',
+    'proposal_title',
+    'proposal_status',
     'start_at',
     'end_at',
     'created_at',
     'updated_at',
-}
-
-EXPECTED_PROPOSAL_KEYS = {
-    'id',
-    'proposed_by',
-    'title',
-    'proposal_status',
-    'proposal_type',
-    'vote_for_result',
-    'vote_against_result',
-    'vote_abstain_result',
-    'percent_for_quorum',
-    'aqua_circulating_supply',
-    'ice_circulating_supply',
-    'created_at',
-    'last_updated_at',
 }
 
 
@@ -224,6 +405,9 @@ class ProposalQueueApiTests(TestCase):
     def _make_proposal(self, **overrides):
         return make_asset_proposal_raw(
             proposal_type=overrides.pop('proposal_type', Proposal.PROPOSAL_TYPE_GENERAL),
+            proposal_status=overrides.pop('proposal_status', Proposal.QUEUED),
+            draft=overrides.pop('draft', False),
+            hide=overrides.pop('hide', False),
             **overrides,
         )
 
@@ -234,6 +418,10 @@ class ProposalQueueApiTests(TestCase):
             start_at = datetime(2026, 6, 8, 0, 0, 0, tzinfo=UTC)
         if end_at is None:
             end_at = datetime(2026, 6, 14, 23, 59, 59, tzinfo=UTC)
+        if proposal.start_at != start_at or proposal.end_at != end_at:
+            proposal.start_at = start_at
+            proposal.end_at = end_at
+            proposal.save(update_fields=['start_at', 'end_at'])
         return ProposalQueueSlot.objects.create(
             proposal=proposal,
             start_at=start_at,
@@ -246,17 +434,24 @@ class ProposalQueueApiTests(TestCase):
         self.client = APIClient()
 
     def test_response_shape(self):
-        self._make_slot()
+        proposal = self._make_proposal(title='Queued proposal')
+        self._make_slot(proposal=proposal)
         response = self.client.get('/api/proposal-queue/')
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(body['count'], 1)
         self.assertEqual(len(body['results']), 1)
+        self.assertEqual(
+            set(body.keys()),
+            {'count', 'next', 'previous', 'results', 'max_booking_datetime', 'booking_horizon_weeks'},
+        )
 
         slot = body['results'][0]
         self.assertEqual(set(slot.keys()), EXPECTED_SLOT_KEYS)
-        self.assertEqual(set(slot['proposal'].keys()), EXPECTED_PROPOSAL_KEYS)
+        self.assertEqual(slot['proposal'], proposal.id)
+        self.assertEqual(slot['proposal_title'], proposal.title)
+        self.assertEqual(slot['proposal_status'], proposal.proposal_status)
 
     def test_response_includes_max_booking_datetime_and_horizon(self):
         self._make_slot()
@@ -322,6 +517,200 @@ class ProposalQueueApiTests(TestCase):
 
         response = self.client.delete('/api/proposal-queue/1/')
         self.assertEqual(response.status_code, 404)
+
+    def test_queue_excludes_hidden_proposal_slot(self):
+        start_at_hidden = datetime(2026, 7, 6, 0, 0, 0, tzinfo=UTC)
+        end_at_hidden = datetime(2026, 7, 12, 23, 59, 59, tzinfo=UTC)
+        hidden = self._make_proposal(title='Hidden proposal', hide=True)
+        self._make_slot(proposal=hidden, start_at=start_at_hidden, end_at=end_at_hidden)
+
+        start_at_visible = datetime(2026, 7, 13, 0, 0, 0, tzinfo=UTC)
+        end_at_visible = datetime(2026, 7, 19, 23, 59, 59, tzinfo=UTC)
+        visible = self._make_proposal(title='Visible proposal')
+        visible_slot = self._make_slot(proposal=visible, start_at=start_at_visible, end_at=end_at_visible)
+
+        response = self.client.get('/api/proposal-queue/')
+
+        body = response.json()
+        self.assertEqual(body['count'], 1)
+        self.assertEqual(body['results'][0]['id'], visible_slot.id)
+
+    def test_queue_excludes_draft_proposal_slot(self):
+        start_at_draft = datetime(2026, 7, 6, 0, 0, 0, tzinfo=UTC)
+        end_at_draft = datetime(2026, 7, 12, 23, 59, 59, tzinfo=UTC)
+        draft = self._make_proposal(title='Draft proposal', draft=True)
+        self._make_slot(proposal=draft, start_at=start_at_draft, end_at=end_at_draft)
+
+        start_at_published = datetime(2026, 7, 13, 0, 0, 0, tzinfo=UTC)
+        end_at_published = datetime(2026, 7, 19, 23, 59, 59, tzinfo=UTC)
+        published = self._make_proposal(title='Published proposal')
+        published_slot = self._make_slot(proposal=published, start_at=start_at_published, end_at=end_at_published)
+
+        response = self.client.get('/api/proposal-queue/')
+
+        body = response.json()
+        self.assertEqual(body['count'], 1)
+        self.assertEqual(body['results'][0]['id'], published_slot.id)
+
+    def test_queue_excludes_pending_action_proposal_slot(self):
+        start_at_pending = datetime(2026, 7, 6, 0, 0, 0, tzinfo=UTC)
+        end_at_pending = datetime(2026, 7, 12, 23, 59, 59, tzinfo=UTC)
+        pending = self._make_proposal(title='Pending proposal', action=Proposal.TO_SUBMIT)
+        self._make_slot(proposal=pending, start_at=start_at_pending, end_at=end_at_pending)
+
+        start_at_visible = datetime(2026, 7, 13, 0, 0, 0, tzinfo=UTC)
+        end_at_visible = datetime(2026, 7, 19, 23, 59, 59, tzinfo=UTC)
+        visible = self._make_proposal(title='Visible proposal')
+        visible_slot = self._make_slot(proposal=visible, start_at=start_at_visible, end_at=end_at_visible)
+
+        response = self.client.get('/api/proposal-queue/')
+
+        body = response.json()
+        self.assertEqual(body['count'], 1)
+        self.assertEqual(body['results'][0]['id'], visible_slot.id)
+
+    def test_queue_excludes_discussion_and_expired_proposals_with_slots(self):
+        slot_week_1_start = datetime(2026, 7, 6, 0, 0, 0, tzinfo=UTC)
+        slot_week_1_end = datetime(2026, 7, 12, 23, 59, 59, tzinfo=UTC)
+        slot_week_2_start = datetime(2026, 7, 13, 0, 0, 0, tzinfo=UTC)
+        slot_week_2_end = datetime(2026, 7, 19, 23, 59, 59, tzinfo=UTC)
+        slot_week_3_start = datetime(2026, 7, 20, 0, 0, 0, tzinfo=UTC)
+        slot_week_3_end = datetime(2026, 7, 26, 23, 59, 59, tzinfo=UTC)
+        slot_week_4_start = datetime(2026, 7, 27, 0, 0, 0, tzinfo=UTC)
+        slot_week_4_end = datetime(2026, 8, 2, 23, 59, 59, tzinfo=UTC)
+
+        discussion = self._make_proposal(
+            title='Discussion with slot',
+            proposal_status=Proposal.DISCUSSION,
+        )
+        self._make_slot(proposal=discussion, start_at=slot_week_1_start, end_at=slot_week_1_end)
+
+        expired = self._make_proposal(
+            title='Expired with slot',
+            proposal_status=Proposal.EXPIRED,
+        )
+        self._make_slot(proposal=expired, start_at=slot_week_2_start, end_at=slot_week_2_end)
+
+        voted = self._make_proposal(
+            title='Voted with slot',
+            proposal_status=Proposal.VOTED,
+        )
+        self._make_slot(proposal=voted, start_at=slot_week_3_start, end_at=slot_week_3_end)
+
+        queued = self._make_proposal(title='Queued proposal')
+        queued_slot = self._make_slot(proposal=queued, start_at=slot_week_4_start, end_at=slot_week_4_end)
+
+        response = self.client.get('/api/proposal-queue/')
+
+        body = response.json()
+        # Only QUEUED and VOTING proposals should appear.
+        self.assertEqual(body['count'], 1)
+        self.assertEqual(body['results'][0]['id'], queued_slot.id)
+
+    def test_queue_includes_public_voting_slot(self):
+        slot_start = datetime(2026, 7, 6, 0, 0, 0, tzinfo=UTC)
+        slot_end = datetime(2026, 7, 12, 23, 59, 59, tzinfo=UTC)
+        voting_proposal = self._make_proposal(
+            title='Active voting proposal',
+            proposal_status=Proposal.VOTING,
+        )
+        voting_slot = self._make_slot(
+            proposal=voting_proposal,
+            start_at=slot_start,
+            end_at=slot_end,
+        )
+
+        response = self.client.get('/api/proposal-queue/')
+
+        body = response.json()
+        self.assertEqual(body['count'], 1)
+        self.assertEqual(body['results'][0]['id'], voting_slot.id)
+        self.assertEqual(body['results'][0]['proposal_status'], Proposal.VOTING)
+
+    def test_queue_api_and_availability_ignore_slotless_legacy_rows_but_include_slot_backed_rows(self):
+        queued_start = datetime(2026, 7, 6, 0, 0, 0, tzinfo=UTC)
+        queued_end = datetime(2026, 7, 12, 23, 59, 59, tzinfo=UTC)
+        voting_start = datetime(2026, 7, 13, 0, 0, 0, tzinfo=UTC)
+        voting_end = datetime(2026, 7, 19, 23, 59, 59, tzinfo=UTC)
+
+        self._make_proposal(
+            title='Legacy queued without slot',
+            proposal_status=Proposal.QUEUED,
+            start_at=queued_start,
+            end_at=queued_end,
+        )
+        self._make_proposal(
+            title='Legacy voting without slot',
+            proposal_status=Proposal.VOTING,
+            start_at=voting_start,
+            end_at=voting_end,
+            transaction_hash='a' * 64,
+        )
+
+        self.assertTrue(is_queue_slot_available(queued_start, queued_end))
+        self.assertTrue(is_queue_slot_available(voting_start, voting_end))
+
+        response = self.client.get('/api/proposal-queue/')
+        self.assertEqual(response.json()['count'], 0)
+
+        queued_slot = self._make_slot(
+            proposal=self._make_proposal(
+                title='Slot-backed queued proposal',
+                proposal_status=Proposal.QUEUED,
+                transaction_hash='b' * 64,
+            ),
+            start_at=queued_start,
+            end_at=queued_end,
+        )
+        voting_slot = self._make_slot(
+            proposal=self._make_proposal(
+                title='Slot-backed voting proposal',
+                proposal_status=Proposal.VOTING,
+                transaction_hash='c' * 64,
+            ),
+            start_at=voting_start,
+            end_at=voting_end,
+        )
+
+        response = self.client.get('/api/proposal-queue/')
+
+        body = response.json()
+        self.assertFalse(is_queue_slot_available(queued_start, queued_end))
+        self.assertFalse(is_queue_slot_available(voting_start, voting_end))
+        self.assertEqual(body['count'], 2)
+        self.assertEqual(
+            {result['id'] for result in body['results']},
+            {queued_slot.id, voting_slot.id},
+        )
+
+    def test_queue_api_excludes_mismatched_queued_and_voting_slot_rows(self):
+        slot_start = datetime(2026, 7, 6, 0, 0, 0, tzinfo=UTC)
+        slot_end = datetime(2026, 7, 12, 23, 59, 59, tzinfo=UTC)
+        actual_start = datetime(2026, 7, 13, 0, 0, 0, tzinfo=UTC)
+        actual_end = datetime(2026, 7, 19, 23, 59, 59, tzinfo=UTC)
+
+        for status in (Proposal.QUEUED, Proposal.VOTING):
+            with self.subTest(status=status):
+                ProposalQueueSlot.objects.all().delete()
+                Proposal.objects.all().delete()
+
+                ghost = self._make_proposal(
+                    title=f'Ghost {status.lower()} proposal',
+                    proposal_status=status,
+                    start_at=actual_start,
+                    end_at=actual_end,
+                )
+                ProposalQueueSlot.objects.create(
+                    proposal=ghost,
+                    start_at=slot_start,
+                    end_at=slot_end,
+                )
+
+                response = self.client.get('/api/proposal-queue/')
+
+                body = response.json()
+                self.assertEqual(body['count'], 0)
+                self.assertEqual(body['results'], [])
 
 
 class ProposalQueueSlotAdminTests(TestCase):

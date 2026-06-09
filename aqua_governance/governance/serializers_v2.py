@@ -675,34 +675,18 @@ class AssetTokenProposalSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 # Proposal Queue serializers
 # ---------------------------------------------------------------------------
-class ProposalQueueProposalSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Proposal
-        fields = [
-            "id",
-            "proposed_by",
-            "title",
-            "proposal_status",
-            "proposal_type",
-            "vote_for_result",
-            "vote_against_result",
-            "vote_abstain_result",
-            "percent_for_quorum",
-            "aqua_circulating_supply",
-            "ice_circulating_supply",
-            "created_at",
-            "last_updated_at",
-        ]
-
-
 class ProposalQueueSlotSerializer(serializers.ModelSerializer):
-    proposal = ProposalQueueProposalSerializer(read_only=True)
+    proposal = serializers.IntegerField(source='proposal_id', read_only=True)
+    proposal_title = serializers.CharField(source='proposal.title', read_only=True)
+    proposal_status = serializers.CharField(source='proposal.proposal_status', read_only=True)
 
     class Meta:
         model = ProposalQueueSlot
         fields = [
             "id",
             "proposal",
+            "proposal_title",
+            "proposal_status",
             "start_at",
             "end_at",
             "created_at",

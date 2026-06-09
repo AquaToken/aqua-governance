@@ -11,6 +11,7 @@ from aqua_governance.governance.asset_tokens import (
 )
 from aqua_governance.governance.forms import ProposalAdminForm
 from aqua_governance.governance.models import AssetToken, LogVote, Proposal, ProposalQueueSlot
+from aqua_governance.governance.proposal_queue import sync_proposal_queue_slot
 
 
 @admin.register(Proposal)
@@ -148,10 +149,29 @@ class ProposalAdmin(admin.ModelAdmin):
         if not request.user.is_superuser and not obj.is_asset_proposal:
             raise PermissionDenied('Managers can manage only asset proposals.')
         super().save_model(request, obj, form, change)
+        sync_proposal_queue_slot(
+            obj,
+            create_missing=self._should_create_missing_queue_slot(form=form, change=change),
+        )
         if obj.is_asset_proposal:
             upsert_asset_token_from_proposal(obj, save=True)
 
+    @staticmethod
+    def _should_create_missing_queue_slot(*, form, change: bool) -> bool:
+        if not change:
+            return True
+
+        if form is None:
+            return False
+
+        # Only create a missing slot after the admin form revalidated scheduling
+        # fields for this save. This keeps legacy slotless queued/voting rows
+        # editable without silently manufacturing a new queue occupant.
+        return bool({'proposal_status', 'start_at', 'end_at'} & set(form.changed_data))
+
     def _list_display_quorum(self, obj):
+        if not obj.ice_circulating_supply or float(obj.ice_circulating_supply) <= 0:
+            return 'Not enough votes'
         if obj.vote_for_result + obj.vote_against_result + obj.vote_abstain_result >= (
             float(obj.ice_circulating_supply)) * obj.percent_for_quorum / 100:
             return 'Enough votes'

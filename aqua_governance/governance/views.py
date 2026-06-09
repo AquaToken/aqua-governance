@@ -1,7 +1,7 @@
 from datetime import datetime, timezone as dt_timezone
 
 from django.conf import settings
-from django.db.models import Exists, F, OuterRef, Prefetch
+from django.db.models import Exists, F, OuterRef, Prefetch, Q
 from django.http import Http404
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
@@ -27,6 +27,7 @@ from aqua_governance.governance.filters import (
     is_active_vote_query,
 )
 from aqua_governance.governance.models import AssetToken, LogVote, Proposal, HistoryProposal, ProposalQueueSlot
+from aqua_governance.governance.proposal_queue import true_queue_slot_occupancy_q
 from aqua_governance.governance.pagination import CustomPageNumberPagination
 from aqua_governance.governance.serializers import (
     LogVoteSerializer,
@@ -134,9 +135,9 @@ class ProposalViewSet(
             queryset = queryset.exclude(proposal_status=Proposal.EXPIRED)
 
         if self.action == "submit_proposal":
-            queryset = queryset.filter(
-                proposal_status=Proposal.DISCUSSION,
-                last_updated_at__lte=timezone.now() - settings.DISCUSSION_TIME,
+            queryset = queryset.filter(proposal_status=Proposal.DISCUSSION).filter(
+                Q(action=Proposal.TO_SUBMIT)
+                | Q(last_updated_at__lte=timezone.now() - settings.DISCUSSION_TIME),
             )
 
         if self.action == "update" or self.action == "partial_update":
@@ -202,8 +203,10 @@ class ProposalViewSet(
                 data={
                     'detail': 'The selected queue slot is already occupied by another proposal.',
                     'code': 'proposal_queue_slot_conflict',
-                    'selected_start_at': proposal.new_start_at,
-                    'selected_end_at': proposal.new_end_at,
+                    'selected_slot': {
+                        'start_at': proposal.new_start_at,
+                        'end_at': proposal.new_end_at,
+                    },
                     'conflict': result.get('conflict'),
                 },
                 status=status.HTTP_409_CONFLICT,
@@ -231,7 +234,10 @@ class ProposalQueueViewSet(ListModelMixin, GenericViewSet):
         now = timezone.now()
         return (
             ProposalQueueSlot.objects
-            .filter(end_at__gte=now)
+            .filter(
+                true_queue_slot_occupancy_q(),
+                end_at__gte=now,
+            )
             .select_related("proposal")
             .order_by("start_at", "id")
         )

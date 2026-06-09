@@ -4,14 +4,16 @@ from typing import Optional
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 from stellar_sdk import Server
 from stellar_sdk.soroban_rpc import GetTransactionStatus
 
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
-from aqua_governance.governance.models import AssetToken, Proposal
+from aqua_governance.governance.models import AssetToken, Proposal, ProposalQueueSlot
 from aqua_governance.governance.onchain_hooks import execute_onchain_action
 from aqua_governance.governance.onchain_hooks.soroban import get_soroban_transaction
+from aqua_governance.governance.proposal_queue import sync_proposal_queue_slot
 from aqua_governance.governance.task_logic.proposal_finalization import (
     update_proposal_final_results,
 )
@@ -35,10 +37,28 @@ def _start_due_scheduled_proposals(now) -> int:
                 proposal_status=Proposal.QUEUED,
                 start_at__lte=now,
                 end_at__gt=now,
+                queue_slot__start_at=F('start_at'),
+                queue_slot__end_at=F('end_at'),
             ).order_by('start_at', 'id'),
         )
         for proposal in proposals:
             locked_proposal = Proposal.objects.select_for_update().get(id=proposal.id)
+            if locked_proposal.proposal_status != Proposal.QUEUED:
+                continue
+            if locked_proposal.hide or locked_proposal.draft:
+                continue
+            if locked_proposal.action != Proposal.NONE:
+                continue
+            if locked_proposal.start_at is None or locked_proposal.start_at > now:
+                continue
+            if locked_proposal.end_at is None or locked_proposal.end_at <= now:
+                continue
+            if not ProposalQueueSlot.objects.filter(
+                proposal_id=locked_proposal.id,
+                start_at=locked_proposal.start_at,
+                end_at=locked_proposal.end_at,
+            ).exists():
+                continue
             if Proposal.has_active_voting_proposal_conflict(current_proposal_id=locked_proposal.id):
                 continue
             locked_proposal.proposal_status = Proposal.VOTING
@@ -59,6 +79,7 @@ def _finish_due_voting_proposals(now) -> None:
     for proposal in proposals:
         proposal.proposal_status = Proposal.VOTED
         proposal.save(update_fields=['proposal_status'])
+        sync_proposal_queue_slot(proposal)
         task_update_proposal_results.delay(proposal.id, True)
 
 
@@ -373,4 +394,3 @@ def task_retry_failed_onchain_executions():
         # proposal is already VOTED and its voted_amount snapshots must
         # not be overwritten by current (possibly melted/claimed) balances.
         update_proposal_final_results(proposal.id)
-
