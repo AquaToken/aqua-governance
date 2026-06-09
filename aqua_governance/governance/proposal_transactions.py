@@ -6,10 +6,10 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
-from aqua_governance.governance.proposal_queue import (
+from aqua_governance.governance.proposal_queue import validate_weekly_queue_slot
+from aqua_governance.governance.proposal_queue_slots import (
     find_queue_slot_conflict,
     sync_proposal_queue_slot,
-    validate_weekly_queue_slot,
 )
 from aqua_governance.utils.payments import check_proposal_status
 
@@ -338,7 +338,7 @@ def _log_submit_slot_conflict(proposal, status, conflict):
             'selected_end_at': proposal.new_end_at,
             'conflicting_proposal_id': conflict.proposal.id,
             'conflicting_proposal_status': conflict.proposal.proposal_status,
-            'conflicting_slot_id': conflict.slot.id if conflict.slot is not None else None,
+            'conflicting_slot_id': conflict.slot.proposal_id if conflict.slot is not None else None,
             'conflicting_start_at': conflict.slot.start_at if conflict.slot is not None else conflict.proposal.start_at,
             'conflicting_end_at': conflict.slot.end_at if conflict.slot is not None else conflict.proposal.end_at,
         },

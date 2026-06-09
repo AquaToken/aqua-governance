@@ -11,7 +11,7 @@ from aqua_governance.governance.asset_tokens import (
 )
 from aqua_governance.governance.forms import ProposalAdminForm
 from aqua_governance.governance.models import AssetToken, LogVote, Proposal, ProposalQueueSlot
-from aqua_governance.governance.proposal_queue import sync_proposal_queue_slot
+from aqua_governance.governance.proposal_queue_slots import sync_proposal_queue_slot
 
 
 @admin.register(Proposal)
@@ -375,33 +375,41 @@ class AssetTokenAdmin(admin.ModelAdmin):
 @admin.register(ProposalQueueSlot)
 class ProposalQueueSlotAdmin(admin.ModelAdmin):
     list_display = [
-        'id',
         'proposal_id',
+        'proposal_title',
+        'proposal_status',
         'start_at',
         'end_at',
-        'created_at',
-        'updated_at',
+        'occupied_at',
     ]
     readonly_fields = [
-        'id',
         'proposal',
+        'proposal_title',
+        'proposal_status',
         'start_at',
         'end_at',
-        'created_at',
-        'updated_at',
+        'occupied_at',
     ]
     fields = readonly_fields
     search_fields = [
         '=proposal__id',
-        '=id',
+        'proposal__title',
     ]
     list_filter = [
         ('start_at', admin.DateFieldListFilter),
         ('end_at', admin.DateFieldListFilter),
-        ('created_at', admin.DateFieldListFilter),
+        ('occupied_at', admin.DateFieldListFilter),
     ]
-    ordering = ['start_at', 'id']
+    ordering = ['start_at', 'proposal_id']
     list_select_related = ('proposal',)
+
+    @admin.display(description='proposal title')
+    def proposal_title(self, obj):
+        return obj.proposal.title
+
+    @admin.display(description='proposal status')
+    def proposal_status(self, obj):
+        return obj.proposal.proposal_status
 
     def has_add_permission(self, request):
         return False

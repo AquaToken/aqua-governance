@@ -9,11 +9,12 @@ from django.utils import timezone
 from stellar_sdk import Server
 from stellar_sdk.soroban_rpc import GetTransactionStatus
 
+from aqua_governance.governance import proposal_transactions
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from aqua_governance.governance.models import AssetToken, Proposal, ProposalQueueSlot
 from aqua_governance.governance.onchain_hooks import execute_onchain_action
 from aqua_governance.governance.onchain_hooks.soroban import get_soroban_transaction
-from aqua_governance.governance.proposal_queue import sync_proposal_queue_slot
+from aqua_governance.governance.proposal_queue_slots import sync_proposal_queue_slot
 from aqua_governance.governance.task_logic.proposal_finalization import (
     update_proposal_final_results,
 )
@@ -152,7 +153,7 @@ def task_check_pending_proposal_payments():
         hide=False,
     ).exclude(action=Proposal.NONE)
     for proposal in proposals:
-        proposal.check_transaction()
+        proposal_transactions.check_transaction(proposal)
 
 
 @celery_app.task(ignore_result=True)

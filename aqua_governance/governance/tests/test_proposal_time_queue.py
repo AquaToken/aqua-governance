@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
+from aqua_governance.governance import proposal_transactions
 from aqua_governance.governance.models import Proposal, ProposalQueueSlot
 from aqua_governance.governance.proposal_queue import get_queue_week_start
 from aqua_governance.governance.serializers_v2 import AssetProposalCreateSerializer, SubmitSerializer
@@ -205,7 +206,7 @@ class ProposalTimeQueueTests(TestCase):
             new_transaction_hash='a' * 64,
         )
 
-        proposal.check_transaction()
+        proposal_transactions.check_transaction(proposal)
         proposal.refresh_from_db()
 
         self.assertEqual(proposal.proposal_status, Proposal.DISCUSSION)
@@ -232,7 +233,7 @@ class ProposalTimeQueueTests(TestCase):
             new_transaction_hash='d' * 64,
         )
 
-        proposal.check_transaction()
+        proposal_transactions.check_transaction(proposal)
         proposal.refresh_from_db()
 
         self.assertEqual(proposal.proposal_status, Proposal.QUEUED)
@@ -556,7 +557,7 @@ class ProposalTimeQueueTests(TestCase):
             new_envelope_xdr='xdr',
         )
 
-        proposal.check_transaction()
+        proposal_transactions.check_transaction(proposal)
 
         proposal.refresh_from_db()
         self.assertEqual(proposal.payment_status, Proposal.FINE)

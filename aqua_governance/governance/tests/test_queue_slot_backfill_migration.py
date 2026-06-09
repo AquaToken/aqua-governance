@@ -18,12 +18,12 @@ from aqua_governance.governance.tests._factories import (
 
 UTC = datetime_timezone.utc
 FIXED_NOW = datetime(2026, 6, 10, 12, 0, 0, tzinfo=UTC)
-MIGRATION_NOW_PATCH = 'aqua_governance.governance.migrations.0030_backfill_proposal_queue_slots.timezone.now'
+MIGRATION_NOW_PATCH = 'aqua_governance.governance.migrations.0029_proposal_queue_slot.timezone.now'
 
 
 class ProposalQueueSlotBackfillMigrationTests(TransactionTestCase):
     migrate_from = [('governance', '0028_asset_token_and_proposal_fk')]
-    migrate_to = [('governance', '0030_backfill_proposal_queue_slots')]
+    migrate_to = [('governance', '0029_proposal_queue_slot')]
 
     def setUp(self):
         super().setUp()
@@ -125,22 +125,22 @@ class ProposalQueueSlotBackfillMigrationTests(TransactionTestCase):
             end_at=datetime(2026, 7, 19, 23, 59, 59, tzinfo=UTC),
         )
 
-        apps_0030 = self._migrate_forward()
-        Proposal = apps_0030.get_model('governance', 'Proposal')
-        ProposalQueueSlot = apps_0030.get_model('governance', 'ProposalQueueSlot')
+        apps_0029 = self._migrate_forward()
+        Proposal = apps_0029.get_model('governance', 'Proposal')
+        ProposalQueueSlot = apps_0029.get_model('governance', 'ProposalQueueSlot')
 
         self.assertEqual(ProposalQueueSlot.objects.count(), 3)
 
         migrated_slots = {
-            slot.proposal_id: (slot.start_at, slot.end_at)
-            for slot in ProposalQueueSlot.objects.order_by('start_at', 'id')
+            slot.proposal_id: (slot.start_at, slot.end_at, slot.occupied_at)
+            for slot in ProposalQueueSlot.objects.order_by('start_at', 'proposal_id')
         }
         self.assertEqual(
             migrated_slots,
             {
-                active_voting.id: (current_start, current_end),
-                future_discussion.id: (future_start, future_end),
-                future_remove.id: (later_start, later_end),
+                active_voting.id: (current_start, current_end, FIXED_NOW),
+                future_discussion.id: (future_start, future_end, FIXED_NOW),
+                future_remove.id: (later_start, later_end, FIXED_NOW),
             },
         )
 
@@ -188,68 +188,5 @@ class ProposalQueueSlotBackfillMigrationTests(TransactionTestCase):
 
         with patch(MIGRATION_NOW_PATCH, return_value=FIXED_NOW):
             with self.assertRaisesMessage(ValueError, 'invalid queue slot range'):
-                self.executor = MigrationExecutor(connection)
-                self.executor.migrate(self.migrate_to)
-
-
-class ProposalQueueSlotBackfillExistingConflictMigrationTests(TransactionTestCase):
-    migrate_from = [('governance', '0029_proposal_queue_slot')]
-    migrate_to = [('governance', '0030_backfill_proposal_queue_slots')]
-
-    def setUp(self):
-        super().setUp()
-        self.executor = MigrationExecutor(connection)
-        self.executor.migrate(self.migrate_from)
-        self.apps_0029 = self.executor.loader.project_state(self.migrate_from).apps
-
-    def _proposal_defaults(self):
-        return {
-            'proposed_by': DEFAULT_PROPOSED_BY,
-            'text': Quill(json.dumps({'delta': {'ops': []}, 'html': '<p>x</p>'})),
-            'vote_for_issuer': TERTIARY_ACCOUNT,
-            'vote_against_issuer': QUATERNARY_ACCOUNT,
-            'draft': False,
-            'hide': False,
-            'payment_status': 'FINE',
-            'action': 'NONE',
-            'proposal_type': 'ADD_ASSET',
-            'asset_code': DEFAULT_CODE,
-            'asset_issuer': DEFAULT_ISSUER,
-        }
-
-    def _create_proposal(self, **overrides):
-        Proposal = self.apps_0029.get_model('governance', 'Proposal')
-        defaults = self._proposal_defaults()
-        defaults.update(overrides)
-        return Proposal.objects.create(**defaults)
-
-    def test_forward_fails_when_existing_queue_slot_overlaps_candidate(self):
-        ProposalQueueSlot = self.apps_0029.get_model('governance', 'ProposalQueueSlot')
-        start_at = datetime(2026, 6, 15, 0, 0, 0, tzinfo=UTC)
-        end_at = start_at + timedelta(days=7, seconds=-1)
-
-        blocker = self._create_proposal(
-            title='Existing queued proposal',
-            proposal_type='GENERAL',
-            proposal_status='QUEUED',
-            start_at=start_at,
-            end_at=end_at,
-            asset_code=None,
-            asset_issuer=None,
-        )
-        ProposalQueueSlot.objects.create(
-            proposal_id=blocker.id,
-            start_at=start_at,
-            end_at=end_at,
-        )
-        self._create_proposal(
-            title='Candidate asset proposal',
-            proposal_status='DISCUSSION',
-            start_at=start_at,
-            end_at=end_at,
-        )
-
-        with patch(MIGRATION_NOW_PATCH, return_value=FIXED_NOW):
-            with self.assertRaisesMessage(ValueError, 'conflicts with existing queue slot'):
                 self.executor = MigrationExecutor(connection)
                 self.executor.migrate(self.migrate_to)

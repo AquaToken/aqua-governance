@@ -5,7 +5,7 @@ from django.db import models
 
 from aqua_governance.governance.onchain_actions import derive_proposal_onchain_action_args
 from aqua_governance.governance import payment_statuses
-from aqua_governance.governance.proposal_transactions import check_transaction as check_proposal_transaction
+from aqua_governance.governance import proposal_constants
 from django_quill.fields import QuillField
 from stellar_sdk import Keypair
 
@@ -97,19 +97,13 @@ class Proposal(AssetProposalInfo):
         (FAILED_TRANSACTION, 'Transaction unsuccessful'),
     )  # TODO: remove it
 
-    DISCUSSION = 'DISCUSSION'
-    QUEUED = 'QUEUED'
-    VOTING = 'VOTING'
-    VOTED = 'VOTED'
-    EXPIRED = 'EXPIRED'
+    DISCUSSION = proposal_constants.PROPOSAL_STATUS_DISCUSSION
+    QUEUED = proposal_constants.PROPOSAL_STATUS_QUEUED
+    VOTING = proposal_constants.PROPOSAL_STATUS_VOTING
+    VOTED = proposal_constants.PROPOSAL_STATUS_VOTED
+    EXPIRED = proposal_constants.PROPOSAL_STATUS_EXPIRED
 
-    NEW_PROPOSAL_STATUS_CHOICES = (
-        (DISCUSSION, 'Proposal under discussion'),
-        (QUEUED, 'Proposal queued for voting'),
-        (VOTING, 'Proposal under voting'),
-        (VOTED, 'Voted'),
-        (EXPIRED, 'Expired'),
-    )
+    NEW_PROPOSAL_STATUS_CHOICES = proposal_constants.PROPOSAL_STATUS_CHOICES
 
     PAYMENT_STATUS_CHOICES = (
         (HORIZON_ERROR, 'Bad horizon response'),
@@ -119,17 +113,12 @@ class Proposal(AssetProposalInfo):
         (FINE, 'Fine'),
     )
 
-    NONE = 'NONE'
-    TO_UPDATE = 'TO_UPDATE'
-    TO_SUBMIT = 'TO_SUBMIT'
-    TO_CREATE = 'TO_CREATE'
+    NONE = proposal_constants.PROPOSAL_ACTION_NONE
+    TO_UPDATE = proposal_constants.PROPOSAL_ACTION_TO_UPDATE
+    TO_SUBMIT = proposal_constants.PROPOSAL_ACTION_TO_SUBMIT
+    TO_CREATE = proposal_constants.PROPOSAL_ACTION_TO_CREATE
 
-    PROPOSAL_ACTION_CHOICES = (
-        (TO_UPDATE, 'To update'),
-        (TO_SUBMIT, 'To submit'),
-        (TO_CREATE, 'To create'),
-        (NONE, 'None'),
-    )
+    PROPOSAL_ACTION_CHOICES = proposal_constants.PROPOSAL_ACTION_CHOICES
 
     PROPOSAL_TYPE_GENERAL = 'GENERAL'
     PROPOSAL_TYPE_ADD_ASSET = 'ADD_ASSET'
@@ -283,9 +272,6 @@ class Proposal(AssetProposalInfo):
             asset_contract_address=self.asset_contract_address,
         )
 
-    def check_transaction(self):
-        return check_proposal_transaction(self)
-
     def clean(self):
         super().clean()
         if self.is_asset_proposal and self.asset_token_id:
@@ -370,16 +356,16 @@ class Proposal(AssetProposalInfo):
 class ProposalQueueSlot(models.Model):
     proposal = models.OneToOneField(
         Proposal,
+        primary_key=True,
         on_delete=models.CASCADE,
         related_name='queue_slot',
     )
     start_at = models.DateTimeField(unique=True)
     end_at = models.DateTimeField()
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    occupied_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ['start_at', 'id']
+        ordering = ['start_at', 'proposal_id']
 
     def __str__(self):
         return f'{self.proposal_id}: {self.start_at.isoformat()} -> {self.end_at.isoformat()}'

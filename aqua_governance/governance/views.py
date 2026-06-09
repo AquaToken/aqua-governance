@@ -16,6 +16,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.viewsets import GenericViewSet
 from stellar_sdk import TransactionEnvelope
 
+from aqua_governance.governance import proposal_transactions
 from aqua_governance.governance.filters import (
     ProposalStatusFilterBackend,
     ProposalOwnerFilterBackend,
@@ -27,7 +28,8 @@ from aqua_governance.governance.filters import (
     is_active_vote_query,
 )
 from aqua_governance.governance.models import AssetToken, LogVote, Proposal, HistoryProposal, ProposalQueueSlot
-from aqua_governance.governance.proposal_queue import true_queue_slot_occupancy_q
+from aqua_governance.governance.proposal_queue import get_max_booking_datetime
+from aqua_governance.governance.proposal_queue_slots import true_queue_slot_occupancy_q
 from aqua_governance.governance.pagination import CustomPageNumberPagination
 from aqua_governance.governance.serializers import (
     LogVoteSerializer,
@@ -197,7 +199,7 @@ class ProposalViewSet(
     @action(detail=True, methods=["post"], url_path="check_payment", url_name="check-payment")
     def check_proposal_payment(self, request, pk=None):
         proposal = self.get_object()
-        result = proposal.check_transaction()
+        result = proposal_transactions.check_transaction(proposal)
         if result and result.get('outcome') == 'slot_conflict':
             return Response(
                 data={
@@ -239,12 +241,10 @@ class ProposalQueueViewSet(ListModelMixin, GenericViewSet):
                 end_at__gte=now,
             )
             .select_related("proposal")
-            .order_by("start_at", "id")
+            .order_by("start_at", "proposal_id")
         )
 
     def list(self, request, *args, **kwargs):
-        from aqua_governance.governance.proposal_queue import get_max_booking_datetime
-
         response = super().list(request, *args, **kwargs)
         response.data["max_booking_datetime"] = get_max_booking_datetime()
         response.data["booking_horizon_weeks"] = settings.PROPOSAL_QUEUE_BOOKING_HORIZON_WEEKS

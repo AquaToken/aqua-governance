@@ -12,10 +12,12 @@ from aqua_governance.governance.models import Proposal, ProposalQueueSlot
 from aqua_governance.governance.proposal_queue import (
     get_max_booking_datetime,
     has_exact_weekly_range,
-    is_queue_slot_available,
     is_utc_monday_start,
-    sync_proposal_queue_slot,
     validate_weekly_queue_slot,
+)
+from aqua_governance.governance.proposal_queue_slots import (
+    is_queue_slot_available,
+    sync_proposal_queue_slot,
 )
 from aqua_governance.governance.tests._factories import make_asset_proposal_raw
 
@@ -361,7 +363,7 @@ class ProposalQueueSlotModelTests(TestCase):
         target.start_at = target_start
         target.end_at = target_end
 
-        from aqua_governance.governance import proposal_queue as proposal_queue_module
+        from aqua_governance.governance import proposal_queue_slots as proposal_queue_module
 
         original_delete = proposal_queue_module._delete_stale_queue_slots_for_start_at
         delete_call_count = {'count': 0}
@@ -373,7 +375,7 @@ class ProposalQueueSlotModelTests(TestCase):
             return original_delete(*args, **kwargs)
 
         with patch(
-            'aqua_governance.governance.proposal_queue._delete_stale_queue_slots_for_start_at',
+            'aqua_governance.governance.proposal_queue_slots._delete_stale_queue_slots_for_start_at',
             side_effect=delayed_delete,
         ):
             with transaction.atomic():
@@ -390,14 +392,12 @@ class ProposalQueueSlotModelTests(TestCase):
 
 
 EXPECTED_SLOT_KEYS = {
-    'id',
     'proposal',
     'proposal_title',
     'proposal_status',
     'start_at',
     'end_at',
-    'created_at',
-    'updated_at',
+    'occupied_at',
 }
 
 
@@ -485,7 +485,7 @@ class ProposalQueueApiTests(TestCase):
 
         body = response.json()
         self.assertEqual(body['count'], 1)
-        self.assertEqual(body['results'][0]['id'], future_slot.id)
+        self.assertEqual(body['results'][0]['proposal'], future_slot.proposal_id)
 
     def test_returns_multiple_occupied_slots(self):
         slot1 = self._make_slot(
@@ -503,8 +503,8 @@ class ProposalQueueApiTests(TestCase):
 
         body = response.json()
         self.assertEqual(body['count'], 2)
-        result_ids = {r['id'] for r in body['results']}
-        self.assertEqual(result_ids, {slot1.id, slot2.id})
+        result_ids = {r['proposal'] for r in body['results']}
+        self.assertEqual(result_ids, {slot1.proposal_id, slot2.proposal_id})
 
     def test_only_get_method_allowed(self):
         # POST to list endpoint not allowed (no CreateModelMixin)
@@ -533,7 +533,7 @@ class ProposalQueueApiTests(TestCase):
 
         body = response.json()
         self.assertEqual(body['count'], 1)
-        self.assertEqual(body['results'][0]['id'], visible_slot.id)
+        self.assertEqual(body['results'][0]['proposal'], visible_slot.proposal_id)
 
     def test_queue_excludes_draft_proposal_slot(self):
         start_at_draft = datetime(2026, 7, 6, 0, 0, 0, tzinfo=UTC)
@@ -550,7 +550,7 @@ class ProposalQueueApiTests(TestCase):
 
         body = response.json()
         self.assertEqual(body['count'], 1)
-        self.assertEqual(body['results'][0]['id'], published_slot.id)
+        self.assertEqual(body['results'][0]['proposal'], published_slot.proposal_id)
 
     def test_queue_excludes_pending_action_proposal_slot(self):
         start_at_pending = datetime(2026, 7, 6, 0, 0, 0, tzinfo=UTC)
@@ -567,7 +567,7 @@ class ProposalQueueApiTests(TestCase):
 
         body = response.json()
         self.assertEqual(body['count'], 1)
-        self.assertEqual(body['results'][0]['id'], visible_slot.id)
+        self.assertEqual(body['results'][0]['proposal'], visible_slot.proposal_id)
 
     def test_queue_excludes_discussion_and_expired_proposals_with_slots(self):
         slot_week_1_start = datetime(2026, 7, 6, 0, 0, 0, tzinfo=UTC)
@@ -605,7 +605,7 @@ class ProposalQueueApiTests(TestCase):
         body = response.json()
         # Only QUEUED and VOTING proposals should appear.
         self.assertEqual(body['count'], 1)
-        self.assertEqual(body['results'][0]['id'], queued_slot.id)
+        self.assertEqual(body['results'][0]['proposal'], queued_slot.proposal_id)
 
     def test_queue_includes_public_voting_slot(self):
         slot_start = datetime(2026, 7, 6, 0, 0, 0, tzinfo=UTC)
@@ -624,7 +624,7 @@ class ProposalQueueApiTests(TestCase):
 
         body = response.json()
         self.assertEqual(body['count'], 1)
-        self.assertEqual(body['results'][0]['id'], voting_slot.id)
+        self.assertEqual(body['results'][0]['proposal'], voting_slot.proposal_id)
         self.assertEqual(body['results'][0]['proposal_status'], Proposal.VOTING)
 
     def test_queue_api_and_availability_ignore_slotless_legacy_rows_but_include_slot_backed_rows(self):
@@ -679,8 +679,8 @@ class ProposalQueueApiTests(TestCase):
         self.assertFalse(is_queue_slot_available(voting_start, voting_end))
         self.assertEqual(body['count'], 2)
         self.assertEqual(
-            {result['id'] for result in body['results']},
-            {queued_slot.id, voting_slot.id},
+            {result['proposal'] for result in body['results']},
+            {queued_slot.proposal_id, voting_slot.proposal_id},
         )
 
     def test_queue_api_excludes_mismatched_queued_and_voting_slot_rows(self):
@@ -733,7 +733,12 @@ class ProposalQueueSlotAdminTests(TestCase):
 
     def test_admin_list_display_includes_key_fields(self):
         list_display = self.admin.get_list_display(None)
-        self.assertIn('id', list_display)
+        self.assertNotIn('id', list_display)
         self.assertIn('proposal_id', list_display)
+        self.assertIn('proposal_title', list_display)
+        self.assertIn('proposal_status', list_display)
         self.assertIn('start_at', list_display)
         self.assertIn('end_at', list_display)
+        self.assertIn('occupied_at', list_display)
+        self.assertNotIn('created_at', list_display)
+        self.assertNotIn('updated_at', list_display)
