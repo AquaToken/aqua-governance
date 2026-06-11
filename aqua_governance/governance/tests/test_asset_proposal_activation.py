@@ -14,7 +14,11 @@ from aqua_governance.governance.proposal_queue import get_queue_week_start
 from aqua_governance.governance.serializers_v2 import ProposalCreateSerializer
 from aqua_governance.governance.serializers_v2 import SubmitSerializer
 from aqua_governance.governance.tasks import task_check_expired_proposals, task_check_pending_proposal_payments
-from aqua_governance.governance.tests._factories import DEFAULT_PROPOSED_BY, patch_ice_circulating_supply
+from aqua_governance.governance.tests._factories import (
+    DEFAULT_PROPOSED_BY,
+    SECONDARY_ACCOUNT,
+    patch_ice_circulating_supply,
+)
 from aqua_governance.taskapp import app as celery_app
 
 
@@ -231,6 +235,8 @@ class AssetProposalActivationTests(TestCase):
             proposal_status=Proposal.VOTING,
             start_at=start_at,
             end_at=end_at,
+            asset_code='DIFF',
+            asset_issuer=SECONDARY_ACCOUNT,
         )
         ProposalQueueSlot.objects.create(proposal=blocker, start_at=start_at, end_at=end_at)
         queued = self._create_proposal()
@@ -275,6 +281,8 @@ class AssetProposalActivationTests(TestCase):
             proposal_status=Proposal.VOTING,
             start_at=voting_start,
             end_at=voting_end,
+            asset_code='DIFF',
+            asset_issuer=SECONDARY_ACCOUNT,
         )
         queued = self._create_proposal()
 

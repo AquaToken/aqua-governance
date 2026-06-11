@@ -4,8 +4,13 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
 from aqua_governance.governance.asset_payload import validate_asset_payload
-from aqua_governance.governance.asset_tokens import upsert_asset_token_from_proposal
+from aqua_governance.governance.asset_tokens import (
+    find_active_asset_proposal_conflict,
+    serialize_asset_proposal_conflict,
+    upsert_asset_token_from_proposal,
+)
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
+from aqua_governance.governance.exceptions import AssetProposalConflictError, ASSET_PROPOSAL_CONFLICT_DETAIL
 from aqua_governance.governance.models import AssetToken, Proposal, HistoryProposal, ProposalQueueSlot
 from aqua_governance.governance.proposal_queue import validate_weekly_queue_slot
 from aqua_governance.governance.proposal_queue_slots import is_queue_slot_available
@@ -95,6 +100,22 @@ def validate_asset_payload_fields(attrs):
         )
     except ValueError as exc:
         raise ValidationError(_map_asset_validation_error(str(exc))) from exc
+
+
+def _asset_proposal_conflict_validation_error(conflict) -> ValidationError:
+    return ValidationError(
+        {
+            'proposal_id': conflict.proposal.id,
+            'non_field_errors': ASSET_PROPOSAL_CONFLICT_DETAIL,
+        }
+    )
+
+
+def _raise_asset_proposal_conflict(conflict) -> None:
+    raise AssetProposalConflictError(
+        canonical_asset_contract_address=conflict.canonical_asset_contract_address,
+        conflict=serialize_asset_proposal_conflict(conflict),
+    )
 
 
 def _map_asset_validation_error(message: str):
@@ -412,6 +433,14 @@ class AssetProposalCreateSerializer(serializers.ModelSerializer):
         if attrs.get("proposal_type") not in Proposal.ASSET_PROPOSAL_TYPES:
             raise ValidationError({"proposal_type": "Asset proposal type must be ADD_ASSET or REMOVE_ASSET."})
         validate_asset_payload_fields(attrs)
+        conflict = find_active_asset_proposal_conflict(
+            proposal_type=attrs["proposal_type"],
+            asset_code=attrs.get("asset_code"),
+            asset_issuer=attrs.get("asset_issuer"),
+            asset_contract_address=attrs.get("asset_contract_address"),
+        )
+        if conflict is not None:
+            raise _asset_proposal_conflict_validation_error(conflict)
         validate_no_matching_pending_create(attrs)
         return attrs
 
@@ -609,6 +638,11 @@ class SubmitSerializer(serializers.ModelSerializer):
         new_end_at = attrs["new_end_at"]
         validate_weekly_queue_slot(new_start_at, new_end_at)
 
+        if self.instance.is_asset_proposal:
+            conflict = find_active_asset_proposal_conflict(proposal=self.instance)
+            if conflict is not None:
+                _raise_asset_proposal_conflict(conflict)
+
         if not self._is_queue_slot_available(new_start_at, new_end_at, self.instance.id):
             raise self._queue_slot_conflict_error()
         return attrs
@@ -639,6 +673,10 @@ class SubmitSerializer(serializers.ModelSerializer):
         with transaction.atomic():
             acquire_proposal_transition_lock()
             locked_instance = Proposal.objects.select_for_update().get(id=instance.id)
+            if locked_instance.is_asset_proposal:
+                conflict = find_active_asset_proposal_conflict(proposal=locked_instance)
+                if conflict is not None:
+                    _raise_asset_proposal_conflict(conflict)
             if not self._is_queue_slot_available(
                 validated_data["new_start_at"],
                 validated_data["new_end_at"],

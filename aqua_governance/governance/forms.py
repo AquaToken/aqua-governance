@@ -3,7 +3,9 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
+from aqua_governance.governance.asset_tokens import find_active_asset_proposal_conflict
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
+from aqua_governance.governance.exceptions import ASSET_PROPOSAL_CONFLICT_DETAIL
 from aqua_governance.governance.models import Proposal
 from aqua_governance.governance.asset_payload import validate_asset_payload
 from aqua_governance.governance.proposal_queue import validate_weekly_queue_slot
@@ -185,6 +187,19 @@ class ProposalAdminForm(forms.ModelForm):
                         'start_at': 'Proposal voting interval overlaps with another queued or active proposal.',
                         'end_at': 'Proposal voting interval overlaps with another queued or active proposal.',
                     })
+
+        if is_asset_proposal and queue_relevant_status:
+            conflict = find_active_asset_proposal_conflict(
+                proposal_type=proposal_type,
+                asset_code=self._cleaned_or_instance_value(cleaned_data, 'asset_code'),
+                asset_issuer=self._cleaned_or_instance_value(cleaned_data, 'asset_issuer'),
+                asset_contract_address=self._cleaned_or_instance_value(cleaned_data, 'asset_contract_address'),
+                exclude_proposal_id=None if self.instance._state.adding else self.instance.id,
+            )
+            if conflict is not None:
+                raise ValidationError(
+                    f'{ASSET_PROPOSAL_CONFLICT_DETAIL} Conflicting proposal ID: {conflict.proposal.id}.'
+                )
 
         if self.instance._state.adding:
             if is_asset_proposal:

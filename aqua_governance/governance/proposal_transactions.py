@@ -5,6 +5,10 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from aqua_governance.governance.asset_tokens import (
+    find_active_asset_proposal_conflict,
+    serialize_asset_proposal_conflict,
+)
 from aqua_governance.governance.db_locks import acquire_proposal_transition_lock
 from aqua_governance.governance.proposal_queue import validate_weekly_queue_slot
 from aqua_governance.governance.proposal_queue_slots import (
@@ -141,6 +145,17 @@ def _check_submit_transaction(proposal):
                 'payment_status': status,
             }
 
+        asset_conflict = find_active_asset_proposal_conflict(proposal=locked_proposal)
+        if asset_conflict is not None:
+            _mark_submit_retry_state(locked_proposal, status)
+            proposal.refresh_from_db()
+            return {
+                'outcome': 'asset_proposal_conflict',
+                'payment_status': status,
+                'asset_contract_address': asset_conflict.canonical_asset_contract_address,
+                'conflict': serialize_asset_proposal_conflict(asset_conflict),
+            }
+
         conflict = find_queue_slot_conflict(
             start_at=new_start_at,
             end_at=new_end_at,
@@ -197,8 +212,7 @@ def _check_create_transaction(proposal):
         return
 
     if proposal.is_asset_proposal and status != proposal.HORIZON_ERROR:
-        _apply_asset_create_transaction(proposal, status)
-        return
+        return _apply_asset_create_transaction(proposal, status)
 
     if status != proposal.HORIZON_ERROR:
         proposal.draft = False
@@ -272,6 +286,18 @@ def _apply_asset_create_transaction(proposal, status):
         acquire_proposal_transition_lock()
         locked_proposal = proposal_model.objects.select_for_update().get(id=proposal.id)
         if locked_proposal.action == proposal.TO_CREATE:
+            if status == proposal.FINE:
+                asset_conflict = find_active_asset_proposal_conflict(proposal=locked_proposal)
+                if asset_conflict is not None:
+                    locked_proposal.payment_status = status
+                    locked_proposal.save(update_fields=['payment_status'])
+                    proposal.refresh_from_db()
+                    return {
+                        'outcome': 'asset_proposal_conflict',
+                        'payment_status': status,
+                        'asset_contract_address': asset_conflict.canonical_asset_contract_address,
+                        'conflict': serialize_asset_proposal_conflict(asset_conflict),
+                    }
             locked_proposal.draft = False
             locked_proposal.action = proposal.NONE
             locked_proposal.last_updated_at = timezone.now()
@@ -280,6 +306,7 @@ def _apply_asset_create_transaction(proposal, status):
             locked_proposal.payment_status = status
             locked_proposal.save()
     proposal.refresh_from_db()
+    return None
 
 
 def _serialize_queue_conflict(conflict):

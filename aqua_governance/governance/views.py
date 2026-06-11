@@ -17,6 +17,7 @@ from rest_framework.viewsets import GenericViewSet
 from stellar_sdk import TransactionEnvelope
 
 from aqua_governance.governance import proposal_transactions
+from aqua_governance.governance.exceptions import build_asset_proposal_conflict_detail
 from aqua_governance.governance.filters import (
     ProposalStatusFilterBackend,
     ProposalOwnerFilterBackend,
@@ -200,6 +201,14 @@ class ProposalViewSet(
     def check_proposal_payment(self, request, pk=None):
         proposal = self.get_object()
         result = proposal_transactions.check_transaction(proposal)
+        if result and result.get('outcome') == 'asset_proposal_conflict':
+            return Response(
+                data=build_asset_proposal_conflict_detail(
+                    canonical_asset_contract_address=result.get('asset_contract_address'),
+                    conflict=result.get('conflict'),
+                ),
+                status=status.HTTP_409_CONFLICT,
+            )
         if result and result.get('outcome') == 'slot_conflict':
             return Response(
                 data={
